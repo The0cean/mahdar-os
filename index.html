@@ -115,17 +115,8 @@
                 </div>
                 <div class="field"><label>04 / Engine</label>
                   <select id="o-provider">
-<optgroup label="Claude API · your credits">
-                      <option value="api:claude-haiku-5-5">Haiku 5.5 · API</option>
-                      <option value="api:claude-sonnet-5-5">Sonnet 5.5 · API</option>
-                      <option value="api:claude-opus-5-5">Opus 5.5 · API</option>
-                    </optgroup>
-                    <optgroup label="Other">
-                    <option value="claude:haiku">Haiku · Claude Code</option>
-                    <option value="claude:sonnet">Sonnet · Claude Code</option>
-                    <option value="cursor">Cursor · cloud</option>
                     <option value="local">Local · private</option>
-                    </optgroup>
+                    <option value="cursor">Cursor · cloud</option>
                   </select>
                 </div>
               </div>
@@ -236,19 +227,6 @@
             <div class="field-note">// Given to the minutes writer and ASK so names and terms are spelled right.</div>
           </div>
 
-          <div class="section-title">Claude API</div>
-          <div class="export-card">
-            <div id="api-status" class="sys-grid"></div>
-            <div class="field"><label>07 / API key</label>
-              <div class="input-row"><input id="s-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="// paste a key from platform.claude.com (sk-ant-…)" /><button id="btn-api-save" class="hbtn accent">SAVE KEY</button><button id="btn-api-test" class="hbtn">TEST</button><button id="btn-api-del" class="hbtn danger">REMOVE</button></div>
-            </div>
-            <div class="field"><label>07b / Effort</label>
-              <div class="fmt-row" id="s-effort"><div class="fmt-opt" data-v="">DEFAULT</div><div class="fmt-opt" data-v="low">LOW</div><div class="fmt-opt" data-v="medium">MEDIUM</div><div class="fmt-opt" data-v="high">HIGH</div></div>
-            </div>
-            <div class="field-note">// Used when Engine = Haiku / Sonnet / Opus 5.5 · API. Higher effort thinks more: better minutes, more tokens. The key is checked, then kept in the Windows Credential Manager, never in Mahdar's files or log. A key already saved in Mizan is used too.<br />
-              // Cloud: the transcript is sent to Anthropic and billed to your API credits. Spend is shown in // 04 Monitor.</div>
-          </div>
-
           <div class="section-title">Watchdog</div>
           <div class="export-card">
             <div class="field"><label>08 / Keep Mahdar running</label>
@@ -294,7 +272,7 @@
             <input id="b-q" dir="auto" placeholder="// ask anything across your meetings" />
             <button id="b-ask" class="go">ASK</button>
           </div>
-          <div class="b-status"><span id="b-status-text">// …</span><select id="b-engine" class="b-engine" title="Engine for the Brain (tagging and questions)"><option value="same">Engine: same as minutes</option><option value="local">Engine: Local · private</option><option value="api:claude-haiku-5-5">Engine: Haiku 5.5 · API</option><option value="api:claude-sonnet-5-5">Engine: Sonnet 5.5 · API</option><option value="api:claude-opus-5-5">Engine: Opus 5.5 · API</option></select><button id="b-index-all" class="hbtn accent">INDEX ALL</button></div>
+          <div class="b-status"><span id="b-status-text">// …</span><select id="b-engine" class="b-engine" title="Engine for the Brain (tagging and questions)"><option value="same">Engine: same as minutes</option><option value="local">Engine: Local · private</option><option value="cursor">Engine: Cursor · cloud</option></select><button id="b-index-all" class="hbtn accent">INDEX ALL</button></div>
         </div>
         <div class="brain-body">
           <aside class="b-side">
@@ -310,9 +288,9 @@
         <div class="dash">
           <div class="metrics">
             <div class="metric"><div class="label">Up for</div><div class="val" id="mon-uptime">—</div></div>
-            <div class="metric"><div class="label">API spend today</div><div class="val acc" id="mon-today">$0.00</div></div>
-            <div class="metric"><div class="label">API spend this month</div><div class="val" id="mon-month">$0.00</div></div>
-            <div class="metric"><div class="label">API spend total</div><div class="val" id="mon-total">$0.00</div></div>
+            <div class="metric"><div class="label">Jobs running</div><div class="val acc" id="mon-jobs-n">0</div></div>
+            <div class="metric"><div class="label">Minutes writer</div><div class="val" id="mon-writer">—</div></div>
+            <div class="metric"><div class="label">Errors in log</div><div class="val" id="mon-errors">0</div></div>
           </div>
           <div class="dash-grid mon-grid">
             <div>
@@ -322,7 +300,6 @@
             <div>
               <div class="section-title">Jobs</div>
               <div id="mon-jobs" class="sys-grid"></div>
-              <div class="field-note">// spend is priced by Mahdar from token counts; your real balance is on platform.claude.com</div>
             </div>
           </div>
           <div class="section-title list-title">

@@ -3,7 +3,7 @@
 Mahdar is a desktop app that turns Arabic and English meetings into transcripts, minutes, notes and action items. Transcription runs on this laptop.
 
 - **Speech to text**: [Cohere Transcribe Arabic](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026) (Apache 2.0), Q8_0 GGUF, run through [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (MIT) on the Radeon GPU (Vulkan) or the CPU. On the Ryzen AI 9 HX 370 / Radeon 890M, 30 minutes of meeting audio takes about 1.5 minutes.
-- **Minutes and notes**: written either by Claude through `claude -p` (cloud, uses your Claude Code login) or by a local OpenAI-compatible server such as FastFlowLM (`flm serve gemma4-it:12b`), which keeps everything private.
+- **Minutes and notes**: written by a local OpenAI-compatible server such as FastFlowLM (`flm serve gemma4-it:12b`), which keeps everything on the laptop, or by Cursor through `agent -p` (cloud, uses your Cursor login).
 - **Audio**: record from the microphone, or import m4a/mp3/wav/etc. Importing needs `ffmpeg` on PATH.
 
 ## Install
@@ -18,7 +18,7 @@ Download `Mahdar_<version>_x64-setup.exe` from the [Releases](https://github.com
 - **Ask**: Q&A about a meeting. Answers cite clickable `[mm:ss]` timestamps.
 - **Export**: Word (.docx) for outputs and the transcript, PDF through the print dialog, and Markdown.
 - **Unclear parts**: FIX UNCLEAR, or ↻ on a single line, re-runs that audio in smaller pieces.
-- **Writers**: Claude (`claude -p`), Cursor (`agent -p`), or a local OpenAI-compatible server. FastFlowLM is started automatically when it isn't already running.
+- **Writers**: a local OpenAI-compatible server (FastFlowLM is started automatically when it isn't already running) or Cursor (`agent -p`).
 
 ## Layout
 

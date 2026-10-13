@@ -612,7 +612,7 @@ mod tests {
     fn asks_are_kept() {
         let b = Brain::open_in_memory().unwrap();
         let c = vec![ask::Citation { n: 1, meeting_id: "m".into(), title: "T".into(), start_s: 5.0, speaker: None }];
-        b.save_ask("q?", "a [#1]", &c, "Claude", "").unwrap();
+        b.save_ask("q?", "a [#1]", &c, "Local", "").unwrap();
         let a = b.asks(10).unwrap();
         assert_eq!(a[0].citations, c);
     }
