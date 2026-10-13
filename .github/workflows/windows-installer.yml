@@ -54,7 +54,7 @@ jobs:
       # A version tag (e.g. v0.1.0), pushed or given to a manual run, publishes the
       # installer as a GitHub Release; a manual run creates the tag on this commit.
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v') || inputs.release != ''
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != '')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.release || github.ref_name }}
