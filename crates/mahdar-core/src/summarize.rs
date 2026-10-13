@@ -83,6 +83,26 @@ fn glossary_block(glossary: &str) -> String {
     }
 }
 
+/// Tuning for the local writer, from Settings → Writing.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LocalOptions {
+    /// Sampling temperature: low keeps minutes close to the transcript.
+    pub temperature: f32,
+    /// Context window FastFlowLM is started with, in tokens.
+    pub context: u32,
+    /// Start FastFlowLM when nothing answers at the server URL.
+    pub autostart: bool,
+    /// Give up on one answer after this many minutes.
+    pub timeout_min: u32,
+}
+
+impl Default for LocalOptions {
+    fn default() -> Self {
+        LocalOptions { temperature: 0.2, context: FLM_CONTEXT, autostart: true, timeout_min: 30 }
+    }
+}
+
 /// Settings saved by older versions can name a writer that no longer exists; those fall
 /// back to the local writer instead of resetting every other setting.
 pub fn provider_or_local<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Provider, D::Error> {
@@ -133,10 +153,10 @@ pub fn build_question(title: &str, transcript: &str, glossary: &str, history: &[
 }
 
 /// Send a prompt to the writer.
-pub fn generate(provider: &Provider, prompt: &str) -> Result<String> {
+pub fn generate(provider: &Provider, prompt: &str, local: &LocalOptions) -> Result<String> {
     match provider {
         Provider::CursorCli { model } => cursor_cli(model, prompt),
-        Provider::Local { base_url, model } => openai_compatible(base_url, model, prompt),
+        Provider::Local { base_url, model } => openai_compatible(base_url, model, prompt, local),
     }
 }
 
@@ -218,13 +238,14 @@ fn cursor_cli(model: &str, prompt: &str) -> Result<String> {
     Ok(text.trim().to_string())
 }
 
-/// Context window FastFlowLM is started with: enough for ~1.5 h of transcript.
+/// Default context window for FastFlowLM: enough for ~1.5 h of transcript.
 pub const FLM_CONTEXT: u32 = 65_536;
 
 /// Make sure the local OpenAI-compatible server is up. If nothing answers at
-/// `base_url`, start FastFlowLM (`flm serve <model>`) on that port and wait for it.
-/// Returns the child process when Mahdar started it (caller stops it on exit).
-pub fn ensure_local_server(base_url: &str, model: &str, on_starting: impl FnOnce()) -> Result<Option<Child>> {
+/// `base_url`, start FastFlowLM (`flm serve <model>`) on that port and wait for it,
+/// unless auto-start is off. Returns the child process when Mahdar started it
+/// (caller stops it on exit).
+pub fn ensure_local_server(base_url: &str, model: &str, local: &LocalOptions, on_starting: impl FnOnce()) -> Result<Option<Child>> {
     let base = base_url.trim_end_matches('/');
     let client = reqwest::blocking::Client::builder().timeout(Duration::from_secs(3)).build()?;
     let models = |c: &reqwest::blocking::Client| -> Option<serde_json::Value> {
@@ -246,10 +267,13 @@ pub fn ensure_local_server(base_url: &str, model: &str, on_starting: impl FnOnce
         return Ok(None);
     }
 
+    if !local.autostart {
+        bail!("nothing answers at {base}. Start the local server (flm serve {model}), or turn on auto-start in Settings → Writing.");
+    }
     let port = base.rsplit(':').next().and_then(|p| p.split('/').next()).and_then(|p| p.parse::<u16>().ok()).unwrap_or(11434);
     on_starting();
     let mut cmd = Command::new("flm");
-    cmd.args(["serve", model, "--quiet", "-c", &FLM_CONTEXT.to_string(), "-p", &port.to_string()])
+    cmd.args(["serve", model, "--quiet", "-c", &local.context.to_string(), "-p", &port.to_string()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -274,7 +298,7 @@ pub fn ensure_local_server(base_url: &str, model: &str, on_starting: impl FnOnce
     bail!("FastFlowLM didn't start within 4 minutes")
 }
 
-fn openai_compatible(base_url: &str, model: &str, prompt: &str) -> Result<String> {
+fn openai_compatible(base_url: &str, model: &str, prompt: &str, local: &LocalOptions) -> Result<String> {
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "model": model,
@@ -282,11 +306,11 @@ fn openai_compatible(base_url: &str, model: &str, prompt: &str) -> Result<String
             {"role": "system", "content": SYSTEM},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.2,
+        "temperature": local.temperature,
         "stream": false
     });
     let resp = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(60 * 30))
+        .timeout(Duration::from_secs(60 * u64::from(local.timeout_min.max(1))))
         .build()?
         .post(&url)
         .json(&body)

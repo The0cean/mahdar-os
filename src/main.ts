@@ -36,6 +36,8 @@ interface Settings {
   watch_folder: string | null; glossary: string; speakers: boolean; diarizer_path: string;
   remote_enabled: boolean; remote_port: number; remote_token: string; watchdog: boolean;
   brain_provider: Provider | null;
+  default_template: string; auto_output: string; auto_index: boolean;
+  local: { temperature: number; context: number; autostart: boolean; timeout_min: number };
 }
 interface BrainStatus {
   meetings: number; indexed: number; out_of_date: number; untagged: number; busy: boolean;
@@ -67,6 +69,12 @@ const LOCAL_URL = "http://127.0.0.1:11434/v1";
 const LOCAL_MODEL = "gemma4-it:12b";
 let cursorModel = ""; // remembered (in localStorage) while another engine is selected
 
+/** "Cohere Transcribe Arabic · Q5_K_M" from the configured model file. */
+function speechModelName() {
+  const file = settings.model_path.split(/[\\/]/).pop() ?? "";
+  const quant = file.match(/-((?:Q\d\w*)|F16|BF16|F32)\.gguf$/i)?.[1];
+  return file.toLowerCase().startsWith("cohere-transcribe-arabic") ? `Cohere Transcribe Arabic${quant ? ` · ${quant}` : ""}` : file || "speech model";
+}
 const providerValue = (p: Provider) => (p.kind === "local" ? "local" : "cursor");
 function providerName(p: Provider = settings.provider) {
   if (p.kind === "local") return `${p.model} (local)`;
@@ -368,7 +376,7 @@ function renderLibrary() {
 
   const p = settings.provider;
   const sys: [string, string, string, string][] = [
-    [status.model_present ? "green" : "red", "Speech model", status.model_present ? "Cohere Transcribe Arabic · Q8_0 · 2.4 GB" : "not downloaded", status.model_present ? "READY" : "DOWNLOAD"],
+    [status.model_present ? "green" : "red", "Speech model", status.model_present ? speechModelName() : "not downloaded", status.model_present ? "READY" : "DOWNLOAD"],
     ["green", "Compute", status.loaded_backend ? `loaded on ${status.loaded_backend}` : `${settings.backend.toUpperCase()} · loads on first transcription`, status.loaded_backend ? "ACTIVE" : "IDLE"],
     [status.diarizer_present && settings.speakers ? "green" : "gray", "Speakers",
       !status.diarizer_present ? "speaker model not downloaded · Settings" : settings.speakers ? "Sortformer · up to 4 speakers" : "detection off",
@@ -568,6 +576,7 @@ function renderControls() {
   const prev = sel.value;
   sel.innerHTML = templates.map((t) => `<option value="${t.id}">${esc(t.name)}${t.builtin ? "" : " · custom"}</option>`).join("");
   if (templates.some((t) => t.id === prev)) sel.value = prev;
+  else if (templates.some((t) => t.id === settings.default_template)) sel.value = settings.default_template;
   $<HTMLSelectElement>("o-lang").value = settings.output_language;
   const p = settings.provider;
   $<HTMLSelectElement>("o-provider").value = providerValue(p);
@@ -881,7 +890,7 @@ function highlightNow() {
 async function renderSettings() {
   [settings, status] = await Promise.all([invoke<Settings>("get_settings"), invoke<EngineStatus>("engine_status")]);
   $("model-status").innerHTML = `<div class="sys-item"><span class="sys-dot ${status.model_present ? "green" : "red"}"></span>
-    <div class="sys-info"><div class="sys-name">Cohere Transcribe Arabic · Q8_0</div><div class="sys-desc">${status.model_present ? (status.loaded_backend ? `loaded on ${esc(status.loaded_backend)}` : "ready") : "not downloaded (2.4 GB)"}</div></div>
+    <div class="sys-info"><div class="sys-name">${esc(speechModelName())}</div><div class="sys-desc">${status.model_present ? (status.loaded_backend ? `loaded on ${esc(status.loaded_backend)}` : "ready") : "not downloaded (2.4 GB)"}</div></div>
     ${status.model_present ? `<span class="sys-badge">READY</span>` : `<button class="sys-badge" id="btn-download-s">DOWNLOAD</button>`}</div>`;
   $("btn-download-s")?.addEventListener("click", startDownload);
   $("diar-status").innerHTML = `<div class="sys-item"><span class="sys-dot ${status.diarizer_present ? "green" : "red"}"></span>
@@ -907,8 +916,50 @@ async function renderSettings() {
   $<HTMLInputElement>("s-local-model").value = p.kind === "local" ? p.model : LOCAL_MODEL;
   cursorModel = p.kind === "cursor_cli" ? p.model : (store.get("cursorModel") ?? cursorModel);
   $<HTMLInputElement>("s-cursor-model").value = cursorModel;
+  if (p.kind !== "local") {
+    $<HTMLInputElement>("s-local-url").value = store.get("localUrl") ?? LOCAL_URL;
+    $<HTMLInputElement>("s-local-model").value = store.get("localModel") ?? LOCAL_MODEL;
+  }
+  setFmt("s-engine", providerValue(p));
+  $<HTMLSelectElement>("s-outlang").value = settings.output_language;
+  const opts = templates.map((t) => `<option value="${t.id}">${esc(t.name)}${t.builtin ? "" : " · custom"}</option>`).join("");
+  $("s-default-template").innerHTML = opts;
+  $<HTMLSelectElement>("s-default-template").value = templates.some((t) => t.id === settings.default_template) ? settings.default_template : templates[0]?.id ?? "";
+  $("s-auto-output").innerHTML = `<option value="">Nothing</option>${opts}`;
+  $<HTMLSelectElement>("s-auto-output").value = templates.some((t) => t.id === settings.auto_output) ? settings.auto_output : "";
+  setFmt("s-auto-index", settings.auto_index ? "on" : "off");
+  setFmt("s-brain-engine", brainEngineValue());
+  $<HTMLInputElement>("s-local-temp").value = String(settings.local.temperature);
+  $<HTMLInputElement>("s-local-ctx").value = String(settings.local.context);
+  $<HTMLInputElement>("s-local-timeout").value = String(settings.local.timeout_min);
+  setFmt("s-local-autostart", settings.local.autostart ? "on" : "off");
   renderCustomTemplates();
   $("s-data-dir").textContent = `// data: ${status.data_dir}`;
+  markSettingsDirty(false);
+}
+
+function markSettingsDirty(dirty = true) {
+  const n = $("s-dirty");
+  n.textContent = dirty ? "// unsaved changes" : "// changes apply when saved";
+  n.classList.toggle("dirty", dirty);
+}
+
+/** Settings side index: jump to a group, and follow the scroll position. */
+function initSettingsNav() {
+  const box = document.querySelector<HTMLElement>("#v-settings .settings")!;
+  const links = [...document.querySelectorAll<HTMLAnchorElement>("#s-nav a")];
+  const mark = (id: string) => links.forEach((a) => a.classList.toggle("on", a.dataset.to === id));
+  // Scroll only the settings pane (scrollIntoView would also shift the window).
+  links.forEach((a) => (a.onclick = () => { box.scrollTo({ top: $(a.dataset.to!).offsetTop - 32, behavior: "smooth" }); mark(a.dataset.to!); }));
+  box.addEventListener("scroll", () => {
+    const top = box.getBoundingClientRect().top + 40;
+    let cur = links[0].dataset.to!;
+    for (const a of links) if ($(a.dataset.to!).getBoundingClientRect().top <= top) cur = a.dataset.to!;
+    if (box.scrollTop + box.clientHeight >= box.scrollHeight - 4) cur = links[links.length - 1].dataset.to!;
+    mark(cur);
+  });
+  box.addEventListener("input", () => markSettingsDirty());
+  box.addEventListener("click", (e) => { if ((e.target as HTMLElement).classList.contains("fmt-opt")) markSettingsDirty(); });
 }
 
 function setFmt(id: string, v: string) {
@@ -924,6 +975,7 @@ function renderCustomTemplates() {
   box.querySelectorAll<HTMLButtonElement>("button").forEach((b) => (b.onclick = () => {
     settings.custom_templates = settings.custom_templates.filter((t) => t.id !== b.dataset.id);
     renderCustomTemplates();
+    markSettingsDirty();
   }));
 }
 
@@ -937,12 +989,31 @@ async function saveSettings() {
   settings.remote_port = Number($<HTMLInputElement>("s-remote-port").value) || 8787;
   settings.watch_folder = $<HTMLInputElement>("s-watch").value.trim() || null;
   settings.glossary = $<HTMLTextAreaElement>("s-glossary").value;
-  if (settings.provider.kind === "local") {
-    settings.provider = { kind: "local", base_url: $<HTMLInputElement>("s-local-url").value.trim(), model: $<HTMLInputElement>("s-local-model").value.trim() };
-  }
+  const localUrl = $<HTMLInputElement>("s-local-url").value.trim() || LOCAL_URL;
+  const localModel = $<HTMLInputElement>("s-local-model").value.trim() || LOCAL_MODEL;
+  store.set("localUrl", localUrl);
+  store.set("localModel", localModel);
   cursorModel = $<HTMLInputElement>("s-cursor-model").value.trim();
   store.set("cursorModel", cursorModel);
-  if (settings.provider.kind === "cursor_cli") settings.provider = { kind: "cursor_cli", model: cursorModel };
+  const local = { kind: "local" as const, base_url: localUrl, model: localModel };
+  const cursor = { kind: "cursor_cli" as const, model: cursorModel };
+  settings.provider = getFmt("s-engine") === "cursor" ? cursor : local;
+  const be = getFmt("s-brain-engine");
+  settings.brain_provider = be === "local" ? local : be === "cursor" ? cursor : null;
+  settings.output_language = $<HTMLSelectElement>("s-outlang").value;
+  settings.default_template = $<HTMLSelectElement>("s-default-template").value;
+  settings.auto_output = $<HTMLSelectElement>("s-auto-output").value;
+  settings.auto_index = getFmt("s-auto-index") === "on";
+  const num = (id: string, def: number, lo: number, hi: number) => {
+    const v = Number($<HTMLInputElement>(id).value);
+    return Number.isFinite(v) && $<HTMLInputElement>(id).value.trim() !== "" ? Math.min(hi, Math.max(lo, v)) : def;
+  };
+  settings.local = {
+    temperature: num("s-local-temp", 0.2, 0, 1.5),
+    context: Math.round(num("s-local-ctx", 65536, 4096, 262144)),
+    timeout_min: Math.round(num("s-local-timeout", 30, 1, 240)),
+    autostart: getFmt("s-local-autostart") !== "off",
+  };
   try {
     await invoke("save_settings", { settings });
     templates = await invoke<Template[]>("list_templates");
@@ -1063,9 +1134,9 @@ async function init() {
   window.addEventListener("afterprint", () => ($("print-area").innerHTML = ""));
   $("btn-watch-pick").onclick = async () => {
     const dir = await open({ directory: true, multiple: false, defaultPath: $<HTMLInputElement>("s-watch").value || undefined });
-    if (typeof dir === "string") $<HTMLInputElement>("s-watch").value = dir;
+    if (typeof dir === "string") { $<HTMLInputElement>("s-watch").value = dir; markSettingsDirty(); }
   };
-  $("btn-watch-clear").onclick = () => ($<HTMLInputElement>("s-watch").value = "");
+  $("btn-watch-clear").onclick = () => { $<HTMLInputElement>("s-watch").value = ""; markSettingsDirty(); };
   $("btn-remote-token").onclick = async () => {
     if (!(await askDialog("Make a new pairing code? Phones paired before will need to scan the QR code again.", { kind: "warning" }))) return;
     await invoke("remote_new_token");
@@ -1146,6 +1217,9 @@ async function init() {
   refreshBrainStatus();
   $("mon-search").oninput = renderMonitor;
   $("btn-log-folder").onclick = () => invoke("open_log_folder").catch((e) => toast(String(e), true));
+  $("btn-log-folder-s").onclick = () => invoke("open_log_folder").catch((e) => toast(String(e), true));
+  $("btn-data-folder").onclick = () => invoke("open_data_folder").catch((e) => toast(String(e), true));
+  initSettingsNav();
   $("btn-add-template").onclick = () => {
     const name = $<HTMLInputElement>("ct-name").value.trim();
     const prompt = $<HTMLTextAreaElement>("ct-prompt").value.trim();
@@ -1154,6 +1228,7 @@ async function init() {
     $<HTMLInputElement>("ct-name").value = "";
     $<HTMLTextAreaElement>("ct-prompt").value = "";
     renderCustomTemplates();
+    markSettingsDirty();
     toast("Added: press SAVE SETTINGS to keep it");
   };
 
