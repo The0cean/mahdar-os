@@ -1,0 +1,1130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black" />
+<meta name="theme-color" content="#000000" />
+<link rel="manifest" href="/manifest.webmanifest" />
+<title>Mahdar</title>
+<script>try { const t = localStorage.getItem("mahdar-theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch {}</script>
+<style>
+:root {
+  --bg: #0a0a0a; --surface: #111; --surface2: #1a1a1a; --border: #2a2a2a;
+  --text: #fff; --text2: #ccc; --text3: #999; --text4: #666; --text5: #333;
+  --accent: #ff4500; --green: #4caf50; --red: #f44336; --orange: #ff9800;
+  --hl: rgba(255, 69, 0, .14);
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --sans: -apple-system, "SF Pro Text", "Geeza Pro", system-ui, sans-serif;
+  --top: calc(50px + env(safe-area-inset-top));
+  --tabbar: calc(52px + env(safe-area-inset-bottom));
+}
+:root { color-scheme: dark; }
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) { --bg: #fff; --surface: #fff; --surface2: #f6f6f6; --border: #e5e5e5; --text: #000; --text2: #333; --text3: #666; --text4: #999; --text5: #ccc; --hl: rgba(255, 69, 0, .08); color-scheme: light; }
+}
+:root[data-theme="light"] { --bg: #fff; --surface: #fff; --surface2: #f6f6f6; --border: #e5e5e5; --text: #000; --text2: #333; --text3: #666; --text4: #999; --text5: #ccc; --hl: rgba(255, 69, 0, .08); color-scheme: light; }
+* { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+html, body { background: var(--bg); color: var(--text); font-family: var(--sans); -webkit-text-size-adjust: 100%; }
+body { min-height: 100vh; padding-bottom: var(--tabbar); overscroll-behavior-y: none; }
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; touch-action: manipulation; text-align: inherit; }
+button:disabled { opacity: .35; cursor: default; }
+.hidden { display: none !important; }
+/* top bar */
+.top { position: sticky; top: 0; z-index: 20; background: #000; color: #fff; height: var(--top); padding: env(safe-area-inset-top) 12px 0; display: flex; align-items: center; gap: 8px; }
+.brand { font-family: var(--mono); font-weight: 700; letter-spacing: 2px; font-size: 14px; padding-left: 4px; }
+.brand span { color: var(--accent); letter-spacing: 0; margin-left: 6px; }
+.icon-btn { min-width: 44px; height: 44px; display: grid; place-items: center; font-family: var(--mono); font-size: 12px; color: var(--accent); }
+.top .title { font-family: var(--mono); font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #fff; }
+.top .spacer { flex: 1; }
+.theme-btn { font-family: var(--mono); font-size: 10px; letter-spacing: 1px; color: #fff; border: 1px solid #555; padding: 5px 8px; margin-right: 6px; flex-shrink: 0; }
+.theme-btn:active { border-color: var(--accent); color: var(--accent); }
+.conn { width: 8px; height: 8px; border-radius: 50%; background: var(--green); margin-right: 8px; }
+.conn.off { background: var(--red); }
+/* common */
+.label { font-family: var(--mono); font-size: 10px; color: var(--text4); text-transform: uppercase; letter-spacing: 1.5px; }
+.section { padding: 16px; }
+.empty { font-family: var(--mono); font-size: 12px; color: var(--text4); padding: 40px 16px; text-align: center; line-height: 1.8; }
+.btn { display: block; width: 100%; padding: 14px; background: var(--text); color: var(--bg); text-align: center; font-family: var(--mono); font-size: 13px; font-weight: 600; letter-spacing: 1px; }
+.btn:active:not(:disabled) { background: var(--accent); color: #fff; }
+.btn.ghost { background: none; color: var(--text); border: 1px solid var(--border); }
+.btn.ghost:active:not(:disabled) { border-color: var(--accent); color: var(--accent); background: none; }
+.btn.danger { color: var(--red); }
+.btn.small { padding: 10px 8px; font-size: 11px; }
+input, select, textarea { width: 100%; padding: 12px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); font-family: var(--mono); font-size: 16px; border-radius: 0; -webkit-appearance: none; appearance: none; }
+select { background-image: linear-gradient(45deg, transparent 50%, var(--text3) 50%), linear-gradient(135deg, var(--text3) 50%, transparent 50%); background-position: calc(100% - 18px) 50%, calc(100% - 13px) 50%; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 32px; }
+textarea { resize: none; line-height: 1.6; }
+.field { margin-bottom: 12px; }
+.field .label { margin-bottom: 6px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.tag { font-family: var(--mono); font-size: 9px; padding: 2px 6px; border: 1px solid var(--border); letter-spacing: 1px; color: var(--text3); white-space: nowrap; }
+.tag.live { color: var(--accent); border-color: var(--accent); }
+.tag.ok { color: var(--green); border-color: var(--green); }
+.tag.ready { background: var(--green); border-color: var(--green); color: #fff; }
+.tag.err { color: var(--red); border-color: var(--red); }
+.note { font-family: var(--mono); font-size: 11px; color: var(--text4); line-height: 1.7; margin-top: 10px; }
+.note.warn { color: var(--orange); }
+.seg-ctl { display: flex; border: 1px solid var(--border); }
+.seg-ctl button { flex: 1; padding: 10px 4px; text-align: center; font-family: var(--mono); font-size: 11px; color: var(--text3); border-right: 1px solid var(--border); }
+.seg-ctl button:last-child { border-right: 0; }
+.seg-ctl button.on { background: var(--text); color: var(--bg); }
+/* tab bar */
+.tabbar { position: fixed; bottom: 0; left: 0; right: 0; display: flex; background: var(--bg); border-top: 1px solid var(--border); padding-bottom: env(safe-area-inset-bottom); z-index: 20; }
+.tabbar button { flex: 1; height: 52px; text-align: center; font-family: var(--mono); font-size: 10.5px; color: var(--text4); letter-spacing: .5px; border-top: 2px solid transparent; }
+.tabbar button.on { color: var(--text); border-top-color: var(--accent); }
+.tabbar .rec-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--accent); margin-right: 6px; vertical-align: 1px; }
+/* list */
+.row { display: flex; width: 100%; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.row:active { background: var(--surface2); }
+.row .t { flex: 1; min-width: 0; }
+.row .name { font-weight: 600; font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .meta { font-family: var(--mono); font-size: 11px; color: var(--text4); margin-top: 3px; }
+.search { margin: 12px 16px 4px; width: calc(100% - 32px); font-size: 15px; padding: 10px 12px; }
+/* meeting */
+.seg { display: flex; position: sticky; top: var(--top); background: var(--bg); z-index: 15; border-bottom: 1px solid var(--border); }
+.seg button { flex: 1; height: 44px; text-align: center; font-family: var(--mono); font-size: 11px; color: var(--text4); letter-spacing: 1px; border-bottom: 2px solid transparent; }
+.seg button.on { color: var(--text); border-bottom-color: var(--accent); }
+.player { position: sticky; top: calc(var(--top) + 45px); z-index: 14; background: var(--bg); border-bottom: 1px solid var(--border); padding: 8px 12px; display: flex; align-items: center; gap: 10px; }
+.p-btn { width: 40px; height: 40px; background: var(--text); color: var(--bg); display: grid; place-items: center; font-size: 13px; flex-shrink: 0; text-align: center; }
+.p-btn:active { background: var(--accent); }
+.p-time { font-family: var(--mono); font-size: 11px; color: var(--text3); font-variant-numeric: tabular-nums; min-width: 38px; }
+.p-range { flex: 1; -webkit-appearance: none; appearance: none; height: 28px; background: transparent; border: 0; padding: 0; }
+.p-range::-webkit-slider-runnable-track { height: 3px; background: var(--border); }
+.p-range::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; background: var(--accent); margin-top: -5.5px; border-radius: 0; }
+.p-speed { font-family: var(--mono); font-size: 11px; color: var(--text3); border: 1px solid var(--border); padding: 6px 7px; min-width: 40px; text-align: center; }
+.progress { padding: 12px 16px; border-bottom: 1px solid var(--border); background: var(--surface2); }
+.progress .stage { font-family: var(--mono); font-size: 11px; color: var(--accent); }
+.bar { height: 3px; background: var(--border); margin-top: 8px; overflow: hidden; }
+.bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .4s; }
+.bar.indeterminate span { width: 30%; animation: slide 1.2s ease-in-out infinite; }
+@keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
+.tools { display: flex; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.tools .chip { flex-shrink: 0; }
+.chip { font-family: var(--mono); font-size: 11px; padding: 8px 10px; border: 1px solid var(--border); white-space: nowrap; color: var(--text3); }
+.chip.on { border-color: var(--accent); color: var(--accent); }
+.chip.warn { border-color: var(--orange); color: var(--orange); }
+.chip:active { border-color: var(--accent); }
+.line { display: block; width: 100%; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+.line.now { background: var(--hl); box-shadow: inset 3px 0 0 var(--accent); }
+.line.flag { box-shadow: inset 3px 0 0 var(--orange); }
+.line .h { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; }
+.ts { font-family: var(--mono); font-size: 11px; color: var(--accent); padding: 4px 0; }
+.spk { font-family: var(--mono); font-size: 10px; padding: 4px 7px; border: 1px solid var(--c, var(--border)); color: var(--c, var(--text3)); }
+.s1 { --c: #ff4500; } .s2 { --c: #1e88e5; } .s3 { --c: #8e24aa; } .s4 { --c: #00897b; }
+.line .more { margin-left: auto; color: var(--text4); font-size: 18px; line-height: 1; padding: 2px 6px 6px; }
+.line p { font-size: 16.5px; line-height: 1.85; unicode-bidi: plaintext; text-align: start; }
+.badge { font-family: var(--mono); font-size: 9px; color: var(--orange); }
+.md { font-size: 15px; line-height: 1.65; color: var(--text2); unicode-bidi: plaintext; }
+.md h3 { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text); margin: 18px 0 6px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.md h3:first-child { margin-top: 0; }
+.md p { margin: 6px 0; } .md ul, .md ol { padding-inline-start: 20px; margin: 6px 0; } .md li { margin: 3px 0; }
+.md strong { color: var(--text); }
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
+.md table { border-collapse: collapse; width: 100%; font-size: 13px; display: block; overflow-x: auto; }
+.md th, .md td { border-bottom: 1px solid var(--border); padding: 6px; text-align: start; vertical-align: top; }
+.md th { font-family: var(--mono); font-size: 9px; color: var(--text4); text-transform: uppercase; }
+.md .ts, .md .tsl { cursor: pointer; }
+.outs { display: flex; gap: 6px; overflow-x: auto; padding: 0 16px 12px; }
+.actions { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 0 16px 12px; }
+.msg { margin-bottom: 14px; }
+.msg .who { font-family: var(--mono); font-size: 9px; color: var(--text4); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 4px; }
+.msg.user .body { font-family: var(--mono); font-size: 14px; border-left: 2px solid var(--accent); padding-left: 10px; unicode-bidi: plaintext; }
+.msg.assistant .body { background: var(--surface2); border: 1px solid var(--border); padding: 10px 12px; }
+.askbar { position: fixed; left: 0; right: 0; bottom: var(--tabbar); background: var(--bg); border-top: 1px solid var(--border); padding: 8px 12px; display: flex; gap: 8px; z-index: 18; }
+.askbar textarea { flex: 1; padding: 10px; }
+.askbar .btn { width: 72px; padding: 0; display: grid; place-items: center; }
+/* record */
+.rec { display: flex; flex-direction: column; align-items: center; padding: 36px 16px 12px; }
+.rec-btn { width: 132px; height: 132px; border-radius: 50%; border: 2px solid var(--text); display: grid; place-items: center; margin: 22px 0 6px; }
+.rec-btn span { width: 64px; height: 64px; border-radius: 50%; background: var(--accent); transition: all .2s; }
+.rec-btn.on span { width: 44px; height: 44px; border-radius: 4px; }
+.rec-time { font-family: var(--mono); font-size: 52px; font-weight: 700; letter-spacing: -2px; font-variant-numeric: tabular-nums; }
+.meter { width: 100%; height: 4px; background: var(--border); margin-top: 8px; }
+.meter span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .1s; }
+.file-btn { position: relative; overflow: hidden; }
+.file-btn input { position: absolute; inset: 0; opacity: 0; font-size: 100px; }
+/* brain */
+.b-ask { display: flex; gap: 8px; }
+.b-ask textarea { flex: 1; padding: 10px; }
+.b-ask .btn { width: 72px; padding: 0; display: grid; place-items: center; }
+.b-scope { margin-top: 8px; font-family: var(--mono); font-size: 11px; color: var(--accent); border: 1px solid var(--accent); padding: 6px 8px; display: inline-block; }
+.b-scope::after { content: "  ×"; }
+.b-status { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.b-status .note { margin: 0; flex: 1; }
+.b-status .chip { flex-shrink: 0; }
+.b-engine { margin-top: 8px; font-size: 13px; padding: 9px 32px 9px 10px; }
+.b-ent { display: flex; width: 100%; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.b-ent:active { background: var(--surface2); }
+.b-ent .nm { flex: 1; font-size: 15px; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.b-ent .ct { font-family: var(--mono); font-size: 11px; color: var(--text4); }
+.b-group { font-family: var(--mono); font-size: 10px; color: var(--text4); text-transform: uppercase; letter-spacing: 1.5px; padding: 16px 16px 6px; }
+.b-name { font-size: 24px; font-weight: 700; letter-spacing: -0.5px; unicode-bidi: plaintext; }
+.b-tl { padding: 14px 16px; border-bottom: 1px solid var(--border); }
+.b-tl .d { font-family: var(--mono); font-size: 10px; color: var(--text4); }
+.b-tl .t { font-weight: 600; font-size: 15px; margin-top: 2px; unicode-bidi: plaintext; display: block; text-align: start; }
+.b-tl .s { font-size: 14.5px; line-height: 1.6; color: var(--text2); margin-top: 6px; unicode-bidi: plaintext; }
+.b-item { font-size: 13.5px; color: var(--text2); margin-top: 6px; }
+.b-item b { font-family: var(--mono); font-size: 9px; letter-spacing: 1px; color: var(--accent); margin-right: 6px; }
+.b-cite { color: var(--accent); font-family: var(--mono); font-size: 11px; border-bottom: 1px dotted var(--accent); padding: 2px 0; white-space: nowrap; }
+.b-tsrow { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.b-src { display: block; width: 100%; font-family: var(--mono); font-size: 12px; color: var(--text3); padding: 10px 0; border-bottom: 1px solid var(--border); text-align: start; }
+.b-q { font-family: var(--mono); font-size: 13px; border-left: 2px solid var(--accent); padding-left: 10px; margin-bottom: 8px; unicode-bidi: plaintext; }
+/* monitor */
+.mon-row { display: flex; align-items: baseline; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); }
+.mon-row .k { font-family: var(--mono); font-size: 10px; color: var(--text4); text-transform: uppercase; letter-spacing: 1px; width: 92px; flex-shrink: 0; }
+.mon-row .v { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; color: var(--text2); overflow-wrap: anywhere; }
+.mon-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text5); flex-shrink: 0; align-self: center; }
+.mon-dot.ok { background: var(--green); } .mon-dot.warn { background: var(--orange); } .mon-dot.err { background: var(--red); } .mon-dot.busy { background: var(--accent); }
+.spend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); margin-top: 8px; }
+.spend div { background: var(--bg); padding: 12px 10px; }
+.spend b { display: block; font-family: var(--mono); font-size: 20px; font-weight: 700; letter-spacing: -0.5px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.mon-log { font-family: var(--mono); font-size: 11px; line-height: 1.55; }
+.mon-log .ev { padding: 7px 16px; border-bottom: 1px solid var(--border); }
+.mon-log .ev .h { display: flex; gap: 8px; color: var(--text4); font-size: 10px; margin-bottom: 2px; }
+.mon-log .ev .lv { font-weight: 700; }
+.mon-log .ev.WARN { box-shadow: inset 3px 0 0 var(--orange); } .mon-log .ev.WARN .lv { color: var(--orange); }
+.mon-log .ev.ERROR { box-shadow: inset 3px 0 0 var(--red); } .mon-log .ev.ERROR .lv { color: var(--red); }
+.mon-log .ev .m { color: var(--text2); overflow-wrap: anywhere; unicode-bidi: plaintext; }
+/* sheet */
+.sheet-bg { position: fixed; inset: 0; background: rgba(0, 0, 0, .55); z-index: 40; }
+.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 41; background: var(--bg); border-top: 1px solid var(--text); padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); max-height: 85vh; overflow-y: auto; animation: up .18s ease-out; }
+@keyframes up { from { transform: translateY(40px); opacity: .5; } }
+.sheet h4 { font-family: var(--mono); font-size: 11px; color: var(--text4); text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 12px; }
+.sheet .stack { display: grid; gap: 8px; }
+.sheet .spks { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 12px; }
+.sheet .spks .spk { padding: 10px; text-align: center; font-size: 11px; }
+.sheet .spks .spk.cur { background: var(--c); color: #fff; }
+.toast { position: fixed; left: 12px; right: 12px; bottom: calc(var(--tabbar) + 64px); background: var(--text); color: var(--bg); font-family: var(--mono); font-size: 12px; padding: 12px 14px; border-left: 3px solid var(--accent); z-index: 60; }
+.toast.err { border-left-color: var(--red); }
+</style>
+</head>
+<body>
+<header class="top">
+  <button class="icon-btn hidden" id="back" aria-label="Back">← </button>
+  <div class="brand" id="brand">MAHDAR<span>محضر</span></div>
+  <button class="title hidden" id="top-title"></button>
+  <div class="spacer" id="spacer"></div>
+  <button class="theme-btn" id="theme" aria-label="Switch dark or light">DARK</button>
+  <span class="conn" id="conn" title="Connection to your laptop"></span>
+  <button class="icon-btn hidden" id="menu" aria-label="More">•••</button>
+</header>
+
+<main id="v-list">
+  <input class="search" id="search" type="search" placeholder="// search meetings" />
+  <div id="rows"></div>
+</main>
+
+<main id="v-meeting" class="hidden">
+  <nav class="seg" id="seg">
+    <button data-s="minutes" class="on">MINUTES</button><button data-s="transcript">TRANSCRIPT</button><button data-s="ask">ASK</button>
+  </nav>
+  <div class="player" id="player">
+    <button class="p-btn" id="p-play" aria-label="Play">▶</button>
+    <span class="p-time" id="p-cur">00:00</span>
+    <input class="p-range" id="p-range" type="range" min="0" max="1000" value="0" />
+    <span class="p-time" id="p-dur">00:00</span>
+    <button class="p-speed" id="p-speed">1×</button>
+    <audio id="audio" preload="none" playsinline></audio>
+  </div>
+  <div class="progress hidden" id="progress"><div class="stage" id="pg-stage"></div><div class="bar" id="pg-bar"><span id="pg-fill"></span></div></div>
+  <section id="s-minutes"></section>
+  <section id="s-transcript" class="hidden"></section>
+  <section id="s-ask" class="hidden"><div class="section" id="chat"></div><div style="height:90px"></div></section>
+</main>
+
+<main id="v-record" class="hidden">
+  <div class="rec">
+    <div class="label" id="rec-state">Ready</div>
+    <div class="rec-time" id="rec-time">00:00</div>
+    <div class="meter"><span id="rec-level"></span></div>
+    <button class="rec-btn" id="rec-btn" aria-label="Record"><span></span></button>
+  </div>
+  <div class="section">
+    <div class="field"><div class="label">Title (optional)</div><input id="rec-title" dir="auto" placeholder="// meeting title" /></div>
+    <div class="note" id="rec-note"></div>
+    <div class="field" style="margin-top:20px">
+      <div class="label">Or send a recording</div>
+      <div class="grid2" style="margin-top:6px">
+        <div class="btn ghost file-btn">CHOOSE AUDIO FILE<input type="file" id="file" accept="audio/*,video/*,.m4a,.mp3,.wav,.aac,.ogg,.opus,.flac" /></div>
+        <button class="btn ghost" id="paste">PASTE</button>
+      </div>
+    </div>
+    <div class="bar hidden" id="up-bar"><span id="up-fill"></span></div>
+    <div class="note" id="up-note"></div>
+  </div>
+</main>
+
+<main id="v-brain" class="hidden">
+  <div class="section" style="padding-bottom:8px">
+    <div class="b-ask"><textarea id="b-q" rows="2" dir="auto" placeholder="// ask across all your meetings"></textarea><button class="btn" id="b-ask">ASK</button></div>
+    <button class="b-scope hidden" id="b-scope"></button>
+    <div class="b-status"><div class="note" id="b-status">// …</div><button class="chip on" id="b-index">INDEX ALL</button></div>
+    <select id="b-engine" class="b-engine" title="Engine for the Brain (tagging and questions)"><option value="same">Engine: same as minutes</option><option value="local">Engine: Local · private</option><option value="api:claude-haiku-5-5">Engine: Haiku 5.5 · API</option><option value="api:claude-sonnet-5-5">Engine: Sonnet 5.5 · API</option><option value="api:claude-opus-5-5">Engine: Opus 5.5 · API</option></select>
+  </div>
+  <div id="b-body"></div>
+</main>
+
+<main id="v-monitor" class="hidden">
+  <div class="section">
+    <div class="label">Laptop</div>
+    <div id="mon-status"></div>
+    <div class="label" style="margin-top:18px">Claude API spend</div>
+    <div class="spend"><div><span class="label">Today</span><b id="sp-today">$0.00</b></div><div><span class="label">Month</span><b id="sp-month">$0.00</b></div><div><span class="label">Total</span><b id="sp-total">$0.00</b></div></div>
+    <div class="note">// priced by Mahdar from token counts; your real balance is on platform.claude.com</div>
+  </div>
+  <div class="section" style="padding-bottom:8px">
+    <div class="label" style="margin-bottom:8px">Activity log</div>
+    <div class="seg-ctl" id="mon-filter"><button data-v="all" class="on">ALL</button><button data-v="warn">WARNINGS</button><button data-v="error">ERRORS</button></div>
+  </div>
+  <div class="mon-log" id="mon-log"></div>
+</main>
+
+<main id="v-settings" class="hidden">
+  <div class="section">
+    <div class="field"><div class="label">Minutes written by</div>
+      <select id="st-provider"><optgroup label="Claude API · your credits"><option value="api:claude-haiku-5-5">Claude Haiku 5.5 · API</option><option value="api:claude-sonnet-5-5">Claude Sonnet 5.5 · API</option><option value="api:claude-opus-5-5">Claude Opus 5.5 · API</option></optgroup><optgroup label="Other"><option value="claude:haiku">Haiku · Claude Code</option><option value="claude:sonnet">Sonnet · Claude Code</option><option value="cursor">Cursor · cloud</option><option value="local">Local model · private</option></optgroup></select>
+    </div>
+    <div class="field"><div class="label">Minutes language</div>
+      <div class="seg-ctl" id="st-outlang"><button data-v="en">ENGLISH</button><button data-v="ar">ARABIC</button><button data-v="auto">SAME</button></div>
+    </div>
+    <div class="field"><div class="label">Meeting language</div>
+      <div class="seg-ctl" id="st-lang"><button data-v="ar">ARABIC + EN</button><button data-v="en">ENGLISH</button></div>
+    </div>
+    <div class="field"><div class="label">Detect speakers</div>
+      <div class="seg-ctl" id="st-speakers"><button data-v="on">ON</button><button data-v="off">OFF</button></div>
+    </div>
+    <div class="field"><div class="label">Names &amp; terms</div><textarea id="st-glossary" rows="5" dir="auto" placeholder="// one per line: a name or term, optionally = how it is written"></textarea></div>
+    <button class="btn" id="st-save">SAVE</button>
+    <div class="note" id="st-note">// these settings live on your laptop and apply to Mahdar there too</div>
+  </div>
+</main>
+
+<div class="askbar hidden" id="askbar">
+  <textarea id="ask-input" rows="1" dir="auto" placeholder="// ask about this meeting"></textarea>
+  <button class="btn" id="ask-btn">ASK</button>
+</div>
+
+<nav class="tabbar">
+  <button data-v="list" class="on">MEETINGS</button>
+  <button data-v="record"><span class="rec-dot"></span>RECORD</button>
+  <button data-v="brain">BRAIN</button>
+  <button data-v="monitor">MONITOR</button>
+  <button data-v="settings">SETTINGS</button>
+</nav>
+<div id="sheet-root"></div>
+<div class="toast hidden" id="toast"></div>
+
+<script>
+"use strict";
+// ───── script errors → the laptop's activity log (Monitor) ─────
+const LOG = [];
+let logT = 0;
+function dlog(msg) {
+  LOG.push(`${(performance.now() / 1000).toFixed(2)}s ${msg}`);
+  clearTimeout(logT);
+  logT = setTimeout(() => {
+    const body = LOG.splice(0).join(" | ");
+    fetch("/api/log", { method: "POST", credentials: "same-origin", body, headers: { "content-type": "text/plain" } }).catch(() => {});
+  }, 1500);
+}
+window.addEventListener("error", (e) => dlog(`ERROR ${e.message} @${(e.filename || "").split("/").pop()}:${e.lineno}:${e.colno}`));
+window.addEventListener("unhandledrejection", (e) => dlog(`REJECT ${e.reason && (e.reason.stack || e.reason.message || e.reason)}`));
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const pad = (n) => String(n).padStart(2, "0");
+const ts = (s) => { s = Math.max(0, Math.floor(s || 0)); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60); return h ? `${h}:${pad(m)}:${pad(s % 60)}` : `${pad(m)}:${pad(s % 60)}`; };
+const when = (iso) => { const d = new Date(iso); return `${d.getDate()} ${d.toLocaleString("en", { month: "short" })} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+const clean = (t) => { let x = t.includes("@") ? t.replace(/ضوضاء/g, "").replace(/@/g, "").replace(/\s+/g, " ").trim() : t.trim(); return x.replace(/[.\s]/g, "") === "فراغ" ? "" : x; };
+let toastT = 0;
+function toast(msg, err = false) { const t = $("toast"); t.textContent = msg; t.className = "toast" + (err ? " err" : ""); clearTimeout(toastT); toastT = setTimeout(() => t.classList.add("hidden"), err ? 6000 : 2500); }
+
+async function api(path, opts = {}) {
+  let r;
+  const t0 = performance.now();
+  try { r = await fetch(path, { credentials: "same-origin", ...opts, headers: { "content-type": "application/json", ...(opts.headers || {}) } }); }
+  catch (e) { setConn(false); dlog(`FETCH FAIL ${path} ${e.message} after ${Math.round(performance.now() - t0)}ms`); throw new Error("can't reach your laptop: is Mahdar open and Tailscale on?"); }
+  setConn(true);
+  const text = await r.text();
+  if (r.status === 401) throw new Error("not paired: scan the QR code in Mahdar → Settings → Phone");
+  if (!r.ok) throw new Error(text || r.statusText);
+  return text ? JSON.parse(text) : null;
+}
+const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body ?? {}) });
+function setConn(ok) { $("conn").classList.toggle("off", !ok); }
+
+// Minimal Markdown → HTML. Input is escaped first; [mm:ss] become tappable.
+function md(src) {
+  const lines = esc(src).split("\n");
+  let html = "", list = null, table = [];
+  const inline = (s) => s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>").replace(/(^|[^*])\*(?!\s)(.+?)\*/g, "$1<em>$2</em>").replace(/`(.+?)`/g, "<code>$1</code>")
+    .replace(/\[((?:\d{1,2}:\d{2}(?::\d{2})?)(?:\s*[,،–-]\s*\d{1,2}:\d{2}(?::\d{2})?)*)\]/g, (_a, inner) => "[" + inner.replace(/\d{1,2}:\d{2}(?::\d{2})?/g, (t) => `<span class="tsl ts" data-t="${toSecs(t)}">${t}</span>`) + "]");
+  const flushList = () => { if (list) { html += `</${list}>`; list = null; } };
+  const flushTable = () => {
+    if (!table.length) return;
+    const rows = table.filter((r) => !/^\|?\s*:?-{2,}/.test(r)).map((r) => r.replace(/^\||\|$/g, "").split("|").map((c) => inline(c.trim())));
+    html += "<table>" + rows.map((r, i) => "<tr>" + r.map((c) => (i ? `<td>${c}</td>` : `<th>${c}</th>`)).join("") + "</tr>").join("") + "</table>";
+    table = [];
+  };
+  for (const raw of lines) {
+    const l = raw.trimEnd();
+    if (/^\s*\|/.test(l)) { flushList(); table.push(l.trim()); continue; } else flushTable();
+    let m;
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(l)) { flushList(); html += "<hr>"; }
+    else if ((m = l.match(/^(#{1,4})\s+(.*)/))) { flushList(); html += `<h3>${inline(m[2])}</h3>`; }
+    else if ((m = l.match(/^\s*[-*]\s+\[( |x)\]\s+(.*)/i))) { if (list !== "ul") { flushList(); html += "<ul>"; list = "ul"; } html += `<li>${m[1].trim() ? "☑" : "☐"} ${inline(m[2])}</li>`; }
+    else if ((m = l.match(/^\s*[-*•]\s+(.*)/))) { if (list !== "ul") { flushList(); html += "<ul>"; list = "ul"; } html += `<li>${inline(m[1])}</li>`; }
+    else if ((m = l.match(/^\s*\d+[.)]\s+(.*)/))) { if (list !== "ol") { flushList(); html += "<ol>"; list = "ol"; } html += `<li>${inline(m[1])}</li>`; }
+    else if (!l.trim()) flushList();
+    else { flushList(); html += `<p>${inline(l)}</p>`; }
+  }
+  flushList(); flushTable();
+  return html;
+}
+const toSecs = (t) => { const p = t.split(":").map(Number); return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1]; };
+
+// ───── state ─────
+let view = "list", current = null, sub = "minutes", activeOut = null, templates = [], settings = null;
+let meetings = [], progress = {}, pollT = 0, generating = null, asking = false, follow = true;
+
+// ───── bottom sheet ─────
+function sheet(html, wire) {
+  const root = $("sheet-root");
+  root.innerHTML = `<div class="sheet-bg" id="sheet-bg"></div><div class="sheet" role="dialog">${html}</div>`;
+  $("sheet-bg").onclick = closeSheet;
+  wire && wire(root.querySelector(".sheet"));
+}
+function closeSheet() { $("sheet-root").innerHTML = ""; }
+
+// ───── navigation ─────
+function show(v) {
+  view = v;
+  for (const id of ["list", "meeting", "record", "brain", "monitor", "settings"]) $("v-" + id).classList.toggle("hidden", id !== v);
+  document.querySelectorAll(".tabbar button").forEach((b) => b.classList.toggle("on", b.dataset.v === v || (v === "meeting" && b.dataset.v === "list")));
+  const inMeeting = v === "meeting";
+  $("back").classList.toggle("hidden", !inMeeting);
+  $("menu").classList.toggle("hidden", !inMeeting);
+  $("brand").classList.toggle("hidden", inMeeting);
+  $("spacer").classList.toggle("hidden", inMeeting);
+  $("top-title").classList.toggle("hidden", !inMeeting);
+  $("askbar").classList.toggle("hidden", !(inMeeting && sub === "ask"));
+  closeSheet();
+  if (!inMeeting) { const a = $("audio"); a.pause(); }
+  window.scrollTo(0, 0);
+  if (v === "list") loadList();
+  if (v === "settings") loadSettings();
+  clearTimeout(monT);
+  if (v === "monitor") loadMonitor();
+  if (v === "brain") loadBrain();
+}
+
+// ───── polling: one loop for list, meeting and progress ─────
+function schedulePoll(ms = 3000) { clearTimeout(pollT); pollT = setTimeout(poll, ms); }
+async function poll() {
+  try {
+    progress = await api("/api/progress");
+    if (view === "list") await loadList(true);
+    if (current && (generating === current.id || asking)) {
+      const p = progress[current.id];
+      if (p && p.stage.startsWith("failed")) {
+        toast(p.stage.replace(/^failed: /, ""), true);
+        if (asking) { current.chat.pop(); }
+        generating = null; asking = false;
+        if (view === "meeting") renderSub();
+      } else if (!p || p.stage !== "writing" && p.stage !== "starting local model") {
+        const fresh = await api("/api/meetings/" + encodeURIComponent(current.id));
+        if (generating && fresh.outputs.length > jobBefore) activeOut = fresh.outputs[0].id;
+        if (generating && fresh.outputs.length > jobBefore || asking && fresh.chat.length > jobBefore + 1 || !p) {
+          generating = null; asking = false; current = fresh;
+          if (view === "meeting") { renderSub(); renderProgress(); }
+        }
+      }
+    }
+    if (view === "meeting" && current) {
+      const busy = progress[current.id] || current.status === "transcribing";
+      renderProgress();
+      if (busy || current._wasBusy) {
+        const fresh = await api("/api/meetings/" + encodeURIComponent(current.id));
+        const changed = fresh.status !== current.status || fresh.chunks.length !== current.chunks.length || fresh.outputs.length !== current.outputs.length
+          || fresh.chunks.some((c, i) => current.chunks[i] && (c.text !== current.chunks[i].text || c.flag !== current.chunks[i].flag));
+        fresh._wasBusy = !!busy;
+        const keepAudio = current.duration_s > 0;
+        current = fresh;
+        if (changed) { if (!keepAudio) loadAudio(); renderSub(); renderTitle(); }
+      }
+    }
+  } catch { /* shown by the connection dot */ }
+  const anyBusy = Object.keys(progress).length || generating || asking || meetings.some((m) => m.status === "transcribing");
+  schedulePoll(anyBusy ? 2500 : 8000);
+}
+
+// ───── list ─────
+async function loadList(quiet) {
+  try {
+    meetings = await api("/api/meetings");
+    renderList();
+  } catch (e) { if (!quiet) $("rows").innerHTML = `<div class="empty">// ${esc(e.message)}</div>`; }
+}
+function renderList() {
+  const q = $("search").value.trim().toLowerCase();
+  const ms = meetings.filter((m) => !q || m.title.toLowerCase().includes(q));
+  $("rows").innerHTML = ms.length ? ms.map((m) => {
+    const p = progress[m.id];
+    const tag = p ? `<span class="tag live">${p.total ? Math.round((100 * p.done) / p.total) + "%" : "WORKING"}</span>`
+      : m.status === "transcribing" ? '<span class="tag live">WORKING</span>' : m.status === "failed" ? '<span class="tag err">FAILED</span>'
+      : m.n_outputs ? `<span class="tag ok">${m.n_outputs} OUT</span>` : '<span class="tag ready">READY</span>';
+    return `<button class="row" data-id="${m.id}"><div class="t"><div class="name" dir="auto">${esc(m.title)}</div><div class="meta">${when(m.created)}${m.duration_s ? " · " + ts(m.duration_s) : ""}</div></div>${tag}</button>`;
+  }).join("") : `<div class="empty">// ${q ? "no matches" : "no meetings yet<br>// tap RECORD to start"}</div>`;
+}
+
+// ───── meeting ─────
+const spkName = (m, n) => (m.speakers && m.speakers[n]) || `Speaker ${n}`;
+const nSpk = (m) => new Set(m.chunks.map((c) => c.speaker).filter(Boolean)).size;
+async function openMeeting(id, tab) {
+  const other = !current || current.id !== id;
+  // Coming back from the list counts as opening, even for the meeting that was open before.
+  const switching = other || view !== "meeting";
+  if (switching) {
+    // Switch screens right away; data arrives a moment later over the network.
+    const summary = meetings.find((m) => m.id === id);
+    current = null;
+    $("top-title").textContent = summary ? summary.title : "…";
+    show("meeting");
+    for (const x of ["minutes", "transcript", "ask"]) $("s-" + x).classList.toggle("hidden", x !== "minutes");
+    $("s-minutes").innerHTML = '<div class="empty">// opening…</div>';
+    $("progress").classList.add("hidden");
+  }
+  try {
+    const [m] = await Promise.all([
+      api("/api/meetings/" + encodeURIComponent(id)),
+      templates.length ? null : api("/api/templates").then((t) => (templates = t)),
+      settings ? null : api("/api/settings").then((x) => (settings = x)),
+    ]);
+    if (view !== "meeting") return; // user went back meanwhile
+    current = m;
+    if (other) { activeOut = m.outputs[0]?.id ?? null; loadAudio(); }
+    if (!switching) show("meeting");
+    renderTitle();
+    setSub(tab || (other ? (m.outputs.length || m.status !== "ready" ? "minutes" : "transcript") : sub));
+    renderProgress();
+    schedulePoll(1500);
+  } catch (e) {
+    toast(e.message, true);
+    if (!current) show("list");
+  }
+}
+function renderTitle() { $("top-title").textContent = current.title; }
+// From a Brain citation: open the transcript at that moment. iOS only plays inside a tap, so the
+// player is set to start there and the line is highlighted: tap ▶ (or the line) to listen.
+async function openAt(id, t) {
+  await openMeeting(id, "transcript");
+  if (!current || current.id !== id) return;
+  seek(t, false);
+  const idx = current.chunks.findIndex((c) => t >= c.start_s && t < c.end_s);
+  const el = document.querySelector(`.line[data-i="${idx}"]`);
+  if (el) {
+    document.querySelectorAll(".line.now").forEach((l) => l.classList.remove("now"));
+    el.classList.add("now");
+    window.scrollBy({ top: el.getBoundingClientRect().top - 170 });
+  }
+  toast(`Tap ▶ to play from ${ts(t)}`);
+}
+function setSub(s) {
+  sub = s;
+  document.querySelectorAll("#seg button").forEach((b) => b.classList.toggle("on", b.dataset.s === s));
+  for (const x of ["minutes", "transcript", "ask"]) $("s-" + x).classList.toggle("hidden", x !== s);
+  $("askbar").classList.toggle("hidden", s !== "ask");
+  renderSub();
+  window.scrollTo(0, 0);
+}
+function renderSub() { if (!current) return; if (sub === "minutes") renderMinutes(); else if (sub === "transcript") renderTranscript(); else renderChat(); }
+
+function renderProgress() {
+  if (!current) return;
+  const p = progress[current.id];
+  const busyText = { decoding: "Decoding audio", "detecting speakers": "Detecting speakers", "loading model": "Loading speech model", transcribing: "Transcribing", retrying: "Fixing unclear parts", writing: "Writing", "starting local model": "Starting local model (~35 s)" };
+  const box = $("progress");
+  if (!p && !(current && current.status === "transcribing")) { box.classList.add("hidden"); return; }
+  box.classList.remove("hidden");
+  if (p && p.stage.startsWith("failed")) { $("pg-stage").textContent = "// " + p.stage; $("pg-bar").classList.remove("indeterminate"); $("pg-fill").style.width = "0"; return; }
+  const stage = p ? busyText[p.stage] || p.stage : "Queued";
+  $("pg-stage").textContent = "// " + stage + (p && p.total ? ` · ${p.done} / ${p.total}` : "") + "…";
+  $("pg-bar").classList.toggle("indeterminate", !(p && p.total));
+  $("pg-fill").style.width = p && p.total ? (100 * p.done) / p.total + "%" : "";
+}
+
+function renderMinutes() {
+  const m = current, box = $("s-minutes");
+  if (m.status === "failed") { box.innerHTML = `<div class="empty">// failed: ${esc(m.error || "")}<br><br></div><div class="section"><button class="btn ghost" id="m-retx">RE-TRANSCRIBE</button></div>`; $("m-retx").onclick = retranscribe; return; }
+  if (m.status !== "ready") { box.innerHTML = '<div class="empty">// transcribing on your laptop…<br>// this page updates by itself</div>'; return; }
+  const pv = providerValue(settings.provider);
+  let html = `<div class="section">
+    <div class="field"><div class="label">Write</div><select id="tpl">${templates.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select></div>
+    <div class="grid2 field">
+      <select id="m-provider" aria-label="Engine"><option value="api:claude-haiku-5-5">Haiku 5.5 · API</option><option value="api:claude-sonnet-5-5">Sonnet 5.5 · API</option><option value="api:claude-opus-5-5">Opus 5.5 · API</option><option value="claude:haiku">Haiku · Claude Code</option><option value="claude:sonnet">Sonnet · Claude Code</option><option value="cursor">Cursor · cloud</option><option value="local">Local · private</option></select>
+      <select id="m-lang" aria-label="Language"><option value="en">English</option><option value="ar">Arabic</option><option value="auto">Same as meeting</option></select>
+    </div>
+    <button class="btn" id="gen">${generating === m.id ? "WRITING… KEEP THIS OPEN" : "GENERATE"}</button>
+  </div>`;
+  if (m.outputs.length) {
+    const o = m.outputs.find((x) => x.id === activeOut) || m.outputs[0];
+    activeOut = o.id;
+    const label = (x) => m.outputs.filter((y) => y.template_name === x.template_name).length > 1 ? `${x.template_name} · ${when(x.created).split(" ").pop()}` : x.template_name;
+    html += `<div class="outs">${m.outputs.map((x) => `<button class="chip${x.id === o.id ? " on" : ""}" data-o="${x.id}">${esc(label(x))}</button>`).join("")}</div>
+      <div class="actions"><button class="btn ghost small" id="o-share">SHARE</button><button class="btn ghost small" id="o-copy">COPY</button><button class="btn ghost small" id="o-word">WORD</button><button class="btn ghost small danger" id="o-del">DELETE</button></div>
+      <div class="section" style="padding-top:4px"><div class="label" style="margin-bottom:10px">${esc(o.provider)} · ${when(o.created)}</div><div class="md" dir="auto" id="o-md">${md(o.text)}</div></div>`;
+  } else html += '<div class="empty">// no minutes yet: pick one above</div>';
+  box.innerHTML = html;
+  $("m-provider").value = pv;
+  $("m-lang").value = settings.output_language;
+  $("gen").disabled = generating === m.id;
+  $("m-provider").onchange = () => saveQuick({ provider: providerFromValue($("m-provider").value) });
+  $("m-lang").onchange = () => saveQuick({ output_language: $("m-lang").value });
+  $("gen").onclick = generate;
+  box.querySelectorAll(".chip").forEach((c) => (c.onclick = () => { activeOut = c.dataset.o; renderMinutes(); }));
+  wireTsLinks(box);
+  const out = () => m.outputs.find((x) => x.id === activeOut);
+  if (!$("o-share")) return;
+  $("o-share").onclick = async () => { try { await navigator.share({ title: m.title, text: `${m.title}\n\n${out().text}` }); } catch {} };
+  $("o-copy").onclick = async () => { try { await navigator.clipboard.writeText(out().text); toast("Copied"); } catch { toast("Copy failed", true); } };
+  $("o-word").onclick = () => { location.href = `/api/meetings/${m.id}/docx?output=${encodeURIComponent(activeOut)}`; };
+  $("o-del").onclick = () => confirmSheet(`Delete this ${esc(out().template_name)}?`, "DELETE", async () => {
+    await api(`/api/meetings/${m.id}/outputs/${encodeURIComponent(activeOut)}`, { method: "DELETE" });
+    activeOut = null; await openMeeting(m.id, "minutes"); toast("Deleted");
+  });
+}
+let jobBefore = 0; // outputs/chat count when the job started, to spot the new one
+async function generate() {
+  const id = current.id;
+  jobBefore = current.outputs.length;
+  generating = id; renderMinutes();
+  try {
+    await post(`/api/meetings/${id}/generate`, { template_id: $("tpl").value });
+    progress[id] = { id, stage: "writing", done: 0, total: 0 };
+    renderProgress(); schedulePoll(2500);
+  } catch (e) { toast(e.message, true); generating = null; renderMinutes(); }
+}
+
+function renderTranscript() {
+  const m = current, box = $("s-transcript");
+  if (!m.chunks.length) { box.innerHTML = `<div class="empty">// ${m.status === "transcribing" ? "transcribing on your laptop…" : "no transcript"}</div>`; return; }
+  const flagged = m.chunks.filter((c) => c.flag).length;
+  const hasSpk = nSpk(m) > 0;
+  let prev;
+  const rows = [];
+  m.chunks.forEach((c, i) => {
+    const text = clean(c.text);
+    if (!text && !c.flag) return;
+    const showSpk = hasSpk && c.speaker !== prev; prev = c.speaker;
+    rows.push(`<div class="line${c.flag ? " flag" : ""}" data-i="${i}">
+      <div class="h"><button class="ts" data-t="${c.start_s}">${ts(c.start_s)}</button>${showSpk ? (c.speaker ? `<button class="spk s${c.speaker}" data-i="${i}">${esc(spkName(m, c.speaker))}</button>` : `<button class="spk" data-i="${i}">—</button>`) : ""}${c.flag ? '<span class="badge">⚠ UNCLEAR</span>' : ""}${c.edited ? '<span class="badge" style="color:var(--text4)">✎</span>' : ""}<button class="more" data-i="${i}" aria-label="Line options">⋯</button></div>
+      <p dir="auto">${text ? esc(text) : '<span class="label">// silence or noise</span>'}</p></div>`);
+  });
+  box.innerHTML = `<div class="tools">
+      ${flagged ? `<button class="chip warn" id="t-fix">FIX ${flagged} UNCLEAR</button>` : ""}
+      <button class="chip${follow ? " on" : ""}" id="t-follow">FOLLOW</button>
+      ${hasSpk ? `<button class="chip" id="t-speakers">SPEAKERS (${nSpk(m)})</button>` : ""}
+      <button class="chip" id="t-word">WORD</button>
+    </div>` + rows.join("");
+  box.querySelectorAll(".ts").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); seek(Number(b.dataset.t), true); }));
+  box.querySelectorAll(".spk").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); speakerSheet(Number(b.dataset.i)); }));
+  box.querySelectorAll(".more").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); lineSheet(Number(b.dataset.i)); }));
+  box.querySelectorAll(".line p").forEach((p) => (p.onclick = () => seek(m.chunks[Number(p.parentElement.dataset.i)].start_s, true)));
+  $("t-fix") && ($("t-fix").onclick = () => runRetry(null));
+  $("t-follow").onclick = () => { follow = !follow; $("t-follow").classList.toggle("on", follow); };
+  $("t-speakers") && ($("t-speakers").onclick = speakersOverview);
+  $("t-word").onclick = () => { location.href = `/api/meetings/${m.id}/docx`; };
+  highlightNow(true);
+}
+
+function lineSheet(i) {
+  const m = current, c = m.chunks[i];
+  sheet(`<h4>Line ${ts(c.start_s)}${c.speaker ? " · " + esc(spkName(m, c.speaker)) : ""}</h4>
+    <div class="field"><textarea id="ls-text" rows="5" dir="auto">${esc(clean(c.text))}</textarea></div>
+    <div class="stack">
+      <button class="btn" id="ls-save">SAVE TEXT</button>
+      <div class="grid2"><button class="btn ghost" id="ls-play">▶ PLAY</button><button class="btn ghost" id="ls-redo">↻ RE-RUN</button></div>
+      <button class="btn ghost" id="ls-spk">CHANGE SPEAKER</button>
+      <button class="btn ghost" id="ls-cancel">CANCEL</button>
+    </div>
+    <div class="note">// RE-RUN transcribes this part again on smaller pieces</div>`, () => {
+    $("ls-save").onclick = async () => {
+      try { await post(`/api/meetings/${m.id}/chunks/${i}/text`, { text: $("ls-text").value }); closeSheet(); await openMeeting(m.id, "transcript"); toast("Line saved"); }
+      catch (e) { toast(e.message, true); }
+    };
+    $("ls-play").onclick = () => { closeSheet(); seek(c.start_s, true); };
+    $("ls-redo").onclick = () => { closeSheet(); runRetry([i]); };
+    $("ls-spk").onclick = () => speakerSheet(i);
+    $("ls-cancel").onclick = closeSheet;
+  });
+}
+
+function speakerSheet(i) {
+  const m = current, c = m.chunks[i];
+  const n = c.speaker;
+  sheet(`<h4>${n ? "Speaker " + n : "No speaker"} · line ${ts(c.start_s)}</h4>
+    ${n ? `<div class="field"><div class="label">Name for speaker ${n}</div><input id="sp-name" dir="auto" value="${esc(m.speakers[n] || "")}" placeholder="// speaker name" /></div>
+    <button class="btn" id="sp-save" style="margin-bottom:16px">SAVE NAME</button>` : ""}
+    <div class="label" style="margin-bottom:8px">This line is said by</div>
+    <div class="spks">${[1, 2, 3, 4].map((k) => `<button class="spk s${k}${k === n ? " cur" : ""}" data-k="${k}">${esc(spkName(m, k))}</button>`).join("")}</div>
+    <button class="btn ghost" id="sp-cancel">CANCEL</button>`, () => {
+    $("sp-save") && ($("sp-save").onclick = async () => {
+      try { await post(`/api/meetings/${m.id}/speaker`, { speaker: n, name: $("sp-name").value }); closeSheet(); await openMeeting(m.id, "transcript"); toast("Name saved"); }
+      catch (e) { toast(e.message, true); }
+    });
+    document.querySelectorAll(".sheet .spks .spk").forEach((b) => (b.onclick = async () => {
+      try { await post(`/api/meetings/${m.id}/chunks/${i}/speaker`, { speaker: Number(b.dataset.k) }); closeSheet(); await openMeeting(m.id, "transcript"); }
+      catch (e) { toast(e.message, true); }
+    }));
+    $("sp-cancel").onclick = closeSheet;
+  });
+}
+
+function speakersOverview() {
+  const m = current;
+  const counts = {};
+  m.chunks.forEach((c) => { if (c.speaker) counts[c.speaker] = (counts[c.speaker] || 0) + (c.end_s - c.start_s); });
+  const ids = Object.keys(counts).map(Number).sort();
+  sheet(`<h4>Speakers · names flow into the minutes</h4>
+    ${ids.map((k) => `<div class="field"><div class="label"><span class="spk s${k}" style="padding:1px 6px">${k}</span> · talks ${ts(counts[k])}</div><input data-k="${k}" dir="auto" value="${esc(m.speakers[k] || "")}" placeholder="// Speaker ${k}" /></div>`).join("")}
+    <div class="stack"><button class="btn" id="so-save">SAVE NAMES</button><button class="btn ghost" id="so-cancel">CANCEL</button></div>`, (el) => {
+    $("so-save").onclick = async () => {
+      try {
+        for (const inp of el.querySelectorAll("input[data-k]")) {
+          const k = Number(inp.dataset.k), v = inp.value.trim();
+          if (v !== (m.speakers[k] || "")) await post(`/api/meetings/${m.id}/speaker`, { speaker: k, name: v });
+        }
+        closeSheet(); await openMeeting(m.id, "transcript"); toast("Names saved");
+      } catch (e) { toast(e.message, true); }
+    };
+    $("so-cancel").onclick = closeSheet;
+  });
+}
+
+async function runRetry(indices) {
+  try { await post(`/api/meetings/${current.id}/retry`, { indices }); toast(indices ? "Re-running this part…" : "Fixing unclear parts…"); progress[current.id] = { id: current.id, stage: "retrying", done: 0, total: indices ? 1 : 0 }; current._wasBusy = true; renderProgress(); schedulePoll(1500); }
+  catch (e) { toast(e.message, true); }
+}
+async function retranscribe() {
+  confirmSheet("Transcribe this meeting again with the current settings? The transcript text is replaced; minutes are kept.", "RE-TRANSCRIBE", async () => {
+    await post(`/api/meetings/${current.id}/retranscribe`); current.status = "transcribing"; current._wasBusy = true; renderSub(); renderProgress(); schedulePoll(1500);
+  });
+}
+function confirmSheet(text, action, fn) {
+  sheet(`<h4>Confirm</h4><p style="margin-bottom:16px;line-height:1.6">${text}</p><div class="stack"><button class="btn" id="cf-ok">${action}</button><button class="btn ghost" id="cf-cancel">CANCEL</button></div>`, () => {
+    $("cf-ok").onclick = async () => { closeSheet(); try { await fn(); } catch (e) { toast(e.message, true); } };
+    $("cf-cancel").onclick = closeSheet;
+  });
+}
+function meetingMenu() {
+  const m = current;
+  sheet(`<h4 dir="auto">${esc(m.title)}</h4><div class="stack">
+    <button class="btn ghost" id="mm-rename">RENAME</button>
+    <button class="btn ghost" id="mm-retx">RE-TRANSCRIBE${settings && settings.speakers ? " (WITH SPEAKERS)" : ""}</button>
+    <button class="btn ghost" id="mm-word">TRANSCRIPT AS WORD</button>
+    <button class="btn ghost" id="mm-brain">ADD TO BRAIN (INDEX)</button>
+    <button class="btn ghost danger" id="mm-del">DELETE MEETING</button>
+    <button class="btn ghost" id="mm-cancel">CANCEL</button></div>`, () => {
+    $("mm-rename").onclick = () => sheet(`<h4>Rename</h4><div class="field"><input id="rn" dir="auto" value="${esc(m.title)}" /></div><div class="stack"><button class="btn" id="rn-ok">SAVE</button><button class="btn ghost" id="rn-cancel">CANCEL</button></div>`, () => {
+      $("rn-ok").onclick = async () => { try { await post(`/api/meetings/${m.id}/rename`, { title: $("rn").value }); closeSheet(); await openMeeting(m.id); } catch (e) { toast(e.message, true); } };
+      $("rn-cancel").onclick = closeSheet;
+    });
+    $("mm-retx").onclick = () => retranscribe();
+    $("mm-word").onclick = () => { closeSheet(); location.href = `/api/meetings/${m.id}/docx`; };
+    $("mm-brain").onclick = () => { closeSheet(); brainIndex([m.id]); };
+    $("mm-del").onclick = () => confirmSheet(`Delete "${esc(m.title)}" and its recording from your laptop?`, "DELETE", async () => {
+      await api(`/api/meetings/${m.id}`, { method: "DELETE" }); current = null; show("list"); toast("Deleted");
+    });
+    $("mm-cancel").onclick = closeSheet;
+  });
+}
+
+// ───── ask ─────
+function renderChat() {
+  const m = current, box = $("chat");
+  const msgs = m.chat.map((c) => `<div class="msg ${c.role}"><div class="who">${c.role === "user" ? "You" : esc(c.provider || "Answer")}</div><div class="body${c.role === "assistant" ? " md" : ""}" dir="auto">${c.role === "assistant" ? md(c.text) : esc(c.text)}</div></div>`);
+  if (asking) msgs.push(`<div class="msg assistant"><div class="who">${esc(providerLabel())}</div><div class="body"><span class="label">// reading the transcript…</span></div></div>`);
+  box.innerHTML = msgs.join("") || '<div class="empty">// ask anything about this meeting<br>// answers cite [timestamps]: tap one to play it</div>';
+  wireTsLinks(box);
+  $("ask-btn").disabled = asking || m.status !== "ready";
+  $("ask-btn").textContent = asking ? "…" : "ASK";
+  window.scrollTo(0, document.body.scrollHeight);
+}
+async function ask() {
+  const q = $("ask-input").value.trim();
+  if (!q || !current || asking) return;
+  $("ask-input").value = ""; $("ask-input").blur();
+  asking = true;
+  current.chat.push({ role: "user", text: q, provider: "" });
+  renderChat();
+  jobBefore = current.chat.length - 1;
+  try {
+    await post(`/api/meetings/${current.id}/ask`, { question: q });
+    progress[current.id] = { id: current.id, stage: "writing", done: 0, total: 0 };
+    renderProgress(); schedulePoll(2500);
+  } catch (e) { toast(e.message, true); $("ask-input").value = q; current.chat.pop(); asking = false; renderChat(); }
+}
+function wireTsLinks(root) { root.querySelectorAll(".tsl").forEach((s) => (s.onclick = (e) => { e.stopPropagation(); seek(Number(s.dataset.t), true); })); }
+
+// ───── audio ─────
+const audio = () => $("audio");
+// The audio is fetched only when the user plays: preloading on open saturated the
+// laptop's home upload and made every other request wait (seen in phone.log).
+let audioUrl = "";
+function loadAudio() {
+  const a = audio();
+  a.pause(); a.removeAttribute("src"); a.load();
+  audioUrl = current && current.duration_s > 0 ? `/api/meetings/${current.id}/audio-m4a` : "";
+  updatePlayer();
+}
+function ensureAudio() {
+  const a = audio();
+  if (!a.getAttribute("src") && audioUrl) a.src = audioUrl;
+  return !!a.getAttribute("src");
+}
+// iOS can only jump once the file's metadata has loaded; play() must start inside the tap.
+function seek(t, play) {
+  const a = audio();
+  if (!ensureAudio()) { toast("Audio not ready yet", true); return; }
+  const go = () => { try { a.currentTime = t; } catch {} };
+  if (play) a.play().catch(() => {});
+  if (a.readyState >= 1) go(); else a.addEventListener("loadedmetadata", go, { once: true });
+}
+function updatePlayer() {
+  const a = audio(), d = isFinite(a.duration) && a.duration ? a.duration : current?.duration_s || 0;
+  $("p-cur").textContent = ts(a.currentTime);
+  $("p-dur").textContent = ts(d);
+  if (!dragging) $("p-range").value = d ? Math.round((1000 * a.currentTime) / d) : 0;
+  $("p-play").textContent = a.paused ? "▶" : "❚❚";
+}
+let dragging = false, lastNow = -1;
+function highlightNow(force) {
+  if (!current || sub !== "transcript") return;
+  const t = audio().currentTime;
+  const idx = t > 0 ? current.chunks.findIndex((c) => t >= c.start_s && t < c.end_s) : -1;
+  if (idx === lastNow && !force) return;
+  lastNow = idx;
+  document.querySelectorAll(".line.now").forEach((l) => l.classList.remove("now"));
+  const el = document.querySelector(`.line[data-i="${idx}"]`);
+  if (el) {
+    el.classList.add("now");
+    if (follow && !audio().paused) {
+      const r = el.getBoundingClientRect(), topSpace = 150;
+      if (r.top < topSpace || r.bottom > innerHeight - 90) window.scrollBy({ top: r.top - topSpace - 40, behavior: "smooth" });
+    }
+  }
+}
+
+// ───── record & upload ─────
+let rec = null, recChunks = [], recStart = 0, recT = 0, actx = null, wakeLock = null;
+const canRecord = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+function recNote() {
+  $("rec-note").className = "note" + (canRecord ? "" : " warn");
+  $("rec-note").innerHTML = canRecord ? "// keep Mahdar open on screen while recording · the audio goes to your laptop when you stop"
+    : "// recording needs the HTTPS (Tailscale) address. On plain Wi‑Fi, record in Voice Memos and send the file below.";
+  $("rec-btn").disabled = !canRecord;
+}
+async function toggleRec() {
+  if (rec) { rec.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true } });
+    const mime = MediaRecorder.isTypeSupported("audio/mp4") ? "audio/mp4" : "audio/webm";
+    rec = new MediaRecorder(stream, { mimeType: mime, audioBitsPerSecond: 64000 });
+    recChunks = [];
+    rec.ondataavailable = (e) => e.data.size && recChunks.push(e.data);
+    rec.onstop = async () => {
+      stream.getTracks().forEach((t) => t.stop());
+      clearInterval(recT); actx && actx.close(); wakeLock && wakeLock.release().catch(() => {});
+      $("rec-btn").classList.remove("on"); $("rec-state").textContent = "Sending to laptop";
+      document.querySelector('.tabbar [data-v="record"]').innerHTML = '<span class="rec-dot"></span>RECORD';
+      const blob = new Blob(recChunks, { type: mime });
+      rec = null;
+      await upload(blob, mime.includes("mp4") ? "recording.m4a" : "recording.webm");
+      $("rec-state").textContent = "Ready"; $("rec-time").textContent = "00:00"; $("rec-level").style.width = "0";
+    };
+    rec.start(1000);
+    recStart = Date.now();
+    try { wakeLock = await navigator.wakeLock?.request("screen"); } catch {}
+    $("rec-btn").classList.add("on"); $("rec-state").textContent = "● Recording";
+    document.querySelector('.tabbar [data-v="record"]').innerHTML = '<span class="rec-dot"></span>REC 00:00';
+    actx = new AudioContext(); const an = actx.createAnalyser(); actx.createMediaStreamSource(stream).connect(an);
+    const buf = new Uint8Array(an.fftSize);
+    recT = setInterval(() => {
+      const t = ts((Date.now() - recStart) / 1000);
+      $("rec-time").textContent = t;
+      document.querySelector('.tabbar [data-v="record"]').innerHTML = `<span class="rec-dot"></span>REC ${t}`;
+      an.getByteTimeDomainData(buf);
+      let peak = 0; for (const v of buf) peak = Math.max(peak, Math.abs(v - 128) / 128);
+      $("rec-level").style.width = Math.min(100, Math.sqrt(peak) * 100) + "%";
+    }, 200);
+  } catch (e) { toast("Microphone: " + e.message, true); }
+}
+// PASTE: audio copied on the phone (e.g. Files → Copy). Safari asks with a small "Paste" bubble.
+const EXT = { "audio/mp4": "m4a", "audio/x-m4a": "m4a", "audio/m4a": "m4a", "audio/aac": "aac", "audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/wav": "wav", "audio/x-wav": "wav", "audio/ogg": "ogg", "audio/opus": "opus", "audio/flac": "flac", "audio/webm": "webm", "video/mp4": "mp4", "video/quicktime": "mov" };
+const isMedia = (t) => /^(audio|video)\//.test(t);
+async function pasteAudio() {
+  if (!navigator.clipboard || !navigator.clipboard.read) return toast("This browser can't read the clipboard: use CHOOSE AUDIO FILE", true);
+  let items;
+  try { items = await navigator.clipboard.read(); }
+  catch (e) { dlog(`PASTE read failed: ${e.name} ${e.message}`); return toast("Couldn't read the clipboard: tap Paste in the bubble, or use CHOOSE AUDIO FILE", true); }
+  const types = items.flatMap((it) => it.types);
+  for (const it of items) {
+    const type = it.types.find(isMedia);
+    if (type) { const blob = await it.getType(type); return upload(blob, `pasted.${EXT[type] || "m4a"}`); }
+  }
+  dlog(`PASTE no audio, clipboard has: ${types.join(", ") || "nothing"}`);
+  toast("No audio on the clipboard: copy the recording first, or use CHOOSE AUDIO FILE", true);
+}
+// A long-press → Paste anywhere on the RECORD screen can also carry the file.
+document.addEventListener("paste", (e) => {
+  if (view !== "record") return;
+  const f = [...(e.clipboardData?.files || [])].find((x) => isMedia(x.type) || /\.(m4a|mp3|wav|aac|ogg|opus|flac|mp4|mov|webm)$/i.test(x.name));
+  if (f) { e.preventDefault(); upload(f, f.name || "pasted.m4a"); }
+});
+
+function upload(blob, name) {
+  return new Promise((resolve) => {
+    const title = $("rec-title").value.trim();
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `/api/upload?name=${encodeURIComponent(name)}${title ? "&title=" + encodeURIComponent(title) : ""}`);
+    xhr.setRequestHeader("content-type", blob.type || "application/octet-stream");
+    $("up-bar").classList.remove("hidden");
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable) { $("up-fill").style.width = (100 * e.loaded) / e.total + "%"; $("up-note").textContent = `// sending ${(e.loaded / 1e6).toFixed(1)} / ${(e.total / 1e6).toFixed(1)} MB`; } };
+    xhr.onload = async () => {
+      $("up-bar").classList.add("hidden");
+      if (xhr.status === 200) { $("up-note").textContent = ""; $("rec-title").value = ""; toast("Sent: transcribing on your laptop"); await openMeeting(JSON.parse(xhr.responseText), "minutes"); }
+      else { $("up-note").textContent = ""; toast(xhr.responseText || "Upload failed", true); }
+      resolve();
+    };
+    xhr.onerror = () => { $("up-bar").classList.add("hidden"); toast("Upload failed: is the laptop on and Tailscale connected?", true); resolve(); };
+    xhr.send(blob);
+  });
+}
+
+// ───── settings ─────
+const providerValue = (p) => (p.kind === "local" ? "local" : p.kind === "cursor_cli" ? "cursor" : p.kind === "claude_api" ? `api:${p.model}` : `claude:${p.model}`);
+const API_NAMES = { "claude-haiku-5-5": "Haiku 5.5", "claude-sonnet-5-5": "Sonnet 5.5", "claude-opus-5-5": "Opus 5.5" };
+function providerFromValue(v) {
+  if (v.startsWith("api:")) return { kind: "claude_api", model: v.slice(4), effort: settings.provider.kind === "claude_api" ? settings.provider.effort || "" : "" };
+  if (v === "local") return settings.provider.kind === "local" ? settings.provider : { kind: "local", base_url: "http://127.0.0.1:11434/v1", model: "gemma4-it:12b" };
+  if (v === "cursor") return { kind: "cursor_cli", model: settings.provider.kind === "cursor_cli" ? settings.provider.model : "" };
+  return { kind: "claude_cli", model: v.split(":")[1] };
+}
+const providerLabel = () => { const p = settings.provider; return p.kind === "local" ? `${p.model} (local)` : p.kind === "cursor_cli" ? "Cursor (cloud)" : p.kind === "claude_api" ? `Claude ${API_NAMES[p.model] || p.model}${p.effort ? " · " + p.effort : ""} (API)` : `Claude ${p.model} (cloud)`; };
+async function saveQuick(patch) {
+  try { settings = { ...settings, ...patch }; await post("/api/settings", settings); toast("Saved"); } catch (e) { toast(e.message, true); }
+}
+const segVal = (id) => $(id).querySelector("button.on")?.dataset.v;
+function segSet(id, v) { $(id).querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === v)); }
+async function loadSettings() {
+  try {
+    settings = await api("/api/settings");
+    $("st-provider").value = providerValue(settings.provider);
+    segSet("st-outlang", settings.output_language);
+    segSet("st-lang", settings.language);
+    segSet("st-speakers", settings.speakers ? "on" : "off");
+    $("st-glossary").value = settings.glossary || "";
+  } catch (e) { toast(e.message, true); }
+}
+async function saveSettings() {
+  settings = { ...settings, provider: providerFromValue($("st-provider").value), output_language: segVal("st-outlang"), language: segVal("st-lang"), speakers: segVal("st-speakers") === "on", glossary: $("st-glossary").value };
+  try { await post("/api/settings", settings); toast("Saved on your laptop"); } catch (e) { toast(e.message, true); }
+}
+
+// ───── monitor ─────
+let monT = 0, monData = null;
+const money = (x) => "$" + (x >= 100 ? x.toFixed(0) : x.toFixed(2));
+const ago = (iso) => { if (!iso) return "never"; const s = Math.round((Date.now() - new Date(iso)) / 1000); return s < 60 ? `${s} s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`; };
+const dur = (s) => s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${(s / 3600).toFixed(1)} h` : `${(s / 86400).toFixed(1)} days`;
+async function loadMonitor() {
+  clearTimeout(monT);
+  try { monData = await api("/api/monitor"); renderMonitor(); } catch (e) { $("mon-status").innerHTML = `<div class="empty">// ${esc(e.message)}</div>`; }
+  if (view === "monitor" && !document.hidden) monT = setTimeout(loadMonitor, 4000);
+}
+function renderMonitor() {
+  const d = monData; if (!d) return;
+  const w = d.watchdog;
+  const remoteOk = d.remote.startsWith("listening");
+  const rows = [
+    ["ok", "Mahdar", `v${d.version} · up ${dur(d.uptime_s)} · pid ${d.pid}`],
+    [d.jobs.length ? "busy" : "ok", "Jobs", d.jobs.length ? d.jobs.map((j) => `${j.title}: ${j.stage}${j.total ? ` ${j.done}/${j.total}` : ""}`).join(" · ") : "idle"],
+    [d.speech === "busy" ? "busy" : "ok", "Speech", d.speech],
+    ["ok", "Speakers", d.speakers],
+    ["ok", "Writer", d.writer + (d.local_server ? " · local server running" : "")],
+    [d.api_key === "none" ? "warn" : "ok", "API key", d.api_key === "none" ? "none · add it on the laptop: Settings → Claude API" : d.api_key],
+    [remoteOk ? "ok" : "err", "Phone server", d.remote],
+    [!w.enabled ? "" : w.running ? "ok" : "err", "Watchdog", !w.enabled ? "off · turn on in the laptop's Settings" : `${w.running ? w.state : "not running"} · checked ${ago(w.last_check)}${w.restarts_24h ? ` · ${w.restarts_24h} restart${w.restarts_24h > 1 ? "s" : ""} in 24 h` : ""}`],
+  ];
+  $("mon-status").innerHTML = rows.map(([dot, k, v]) => `<div class="mon-row"><span class="mon-dot ${dot}"></span><span class="k">${k}</span><span class="v" dir="auto">${esc(v)}</span></div>`).join("");
+  $("sp-today").textContent = money(d.spend_today);
+  $("sp-month").textContent = money(d.spend_month);
+  $("sp-total").textContent = money(d.spend_total);
+  const f = segVal("mon-filter");
+  const lines = d.log.filter((l) => f === "all" || (f === "warn" ? l.level !== "INFO" : l.level === "ERROR")).reverse();
+  $("mon-log").innerHTML = lines.length
+    ? lines.map((l) => `<div class="ev ${l.level}"><div class="h"><span>${esc(l.time.slice(5, 19))}</span><span class="lv">${l.level}</span><span>${esc(l.source)}</span></div><div class="m" dir="auto">${esc(l.msg)}</div></div>`).join("")
+    : '<div class="empty">// nothing here</div>';
+}
+
+// ───── brain ─────
+let brainSt = null, brainEnts = [], brainScope = null, brainAsking = false, brainView = "home", brainKey = null, brainT = 0, brainAsksBefore = 0;
+const KINDS = { person: "People", org: "Organisations", initiative: "Initiatives", topic: "Topics" };
+const shortT = (t) => (t.length > 22 ? t.slice(0, 21) + "…" : t);
+async function loadBrain() {
+  clearTimeout(brainT);
+  try {
+    [brainSt, brainEnts] = await Promise.all([api("/api/brain"), api("/api/brain/entities")]);
+  } catch (e) { $("b-body").innerHTML = `<div class="empty">// ${esc(e.message)}</div>`; return; }
+  renderBrainStatus();
+  if (brainView === "home") renderBrainHome();
+  const busy = brainSt.busy || brainAsking;
+  if (view === "brain" && busy) brainT = setTimeout(brainTick, 2500);
+}
+async function brainTick() {
+  if (view !== "brain") return;
+  try { progress = await api("/api/progress"); } catch {}
+  const p = progress["brain-ask"];
+  if (brainAsking && p && p.stage.startsWith("failed")) {
+    brainAsking = false; toast(p.stage.replace(/^failed: /, ""), true); renderBrainHome();
+  } else if (brainAsking && !p) {
+    const asks = await api("/api/brain/asks").catch(() => []);
+    brainAsking = false;
+    if (asks.length && asks[0].id > brainAsksBefore) renderAnswer(asks[0]); else renderBrainHome();
+  }
+  $("b-ask").disabled = brainAsking;
+  $("b-ask").textContent = brainAsking ? "…" : "ASK";
+  await loadBrain();
+}
+function renderBrainStatus() {
+  const s = brainSt; if (!s) return;
+  if (settings) { const p = settings.brain_provider; $("b-engine").value = !p ? "same" : p.kind === "local" ? "local" : p.kind === "claude_api" ? `api:${p.model}` : "same"; }
+  const p = progress["brain-index"];
+  const todo = s.meetings - s.indexed + s.out_of_date + s.untagged;
+  const parts = [`${s.indexed} of ${s.meetings} meetings indexed`];
+  if (s.out_of_date) parts.push(`${s.out_of_date} out of date`);
+  if (s.untagged) parts.push(`${s.untagged} not tagged`);
+  $("b-status").textContent = "// " + (s.busy && p ? `${p.stage}${p.total ? ` · ${p.done + 1}/${p.total}` : ""}…` : parts.join(" · "));
+  $("b-index").disabled = s.busy || todo <= 0;
+  $("b-index").textContent = s.busy ? "INDEXING…" : todo > 0 ? `INDEX ALL (${todo})` : "ALL INDEXED";
+  $("b-scope").classList.toggle("hidden", !brainScope);
+  if (brainScope) $("b-scope").textContent = `ONLY: ${(brainEnts.find((e) => e.key === brainScope) || {}).name || "…"}`;
+}
+async function brainIndex(ids) {
+  try { const n = await post("/api/brain/index", { ids }); toast(`Indexing ${n} meeting${n === 1 ? "" : "s"} on your laptop`); } catch (e) { toast(e.message, true); }
+  if (view === "brain") loadBrain();
+}
+async function renderBrainHome() {
+  brainView = "home"; brainKey = null;
+  const groups = Object.keys(KINDS).map((k) => {
+    const g = brainEnts.filter((e) => e.kind === k);
+    return g.length ? `<div class="b-group">${KINDS[k]}</div>` + g.map((e) => `<button class="b-ent" data-k="${esc(e.key)}"><span class="nm" dir="auto">${esc(e.name)}</span><span class="ct">${e.meetings}</span></button>`).join("") : "";
+  }).join("");
+  let asks = [];
+  try { asks = await api("/api/brain/asks"); } catch {}
+  if (brainView !== "home" || view !== "brain") return;
+  $("b-body").innerHTML = (asks.length ? `<div class="b-group">Recent questions</div>` + asks.slice(0, 5).map((a) => `<button class="b-ent" data-a="${a.id}"><span class="nm" dir="auto" style="font-weight:400;font-family:var(--mono);font-size:13px">${esc(a.question)}</span></button>`).join("") : "")
+    + (groups || '<div class="empty">// people, organisations and topics appear here after indexing<br>// tap INDEX ALL (runs on your laptop)</div>');
+  $("b-body").querySelectorAll("[data-k]").forEach((b) => (b.onclick = () => openEntity(b.dataset.k)));
+  $("b-body").querySelectorAll("[data-a]").forEach((b) => (b.onclick = () => { const a = asks.find((x) => x.id === Number(b.dataset.a)); if (a) renderAnswer(a); }));
+}
+async function openEntity(key) {
+  let p;
+  try { p = await api("/api/brain/entity?key=" + encodeURIComponent(key)); } catch (e) { return toast(e.message, true); }
+  brainView = "entity"; brainKey = key; brainScope = key; renderBrainStatus();
+  const e = p.entity;
+  $("b-body").innerHTML = `<div class="section" style="padding-bottom:6px"><button class="chip" id="b-back">← ALL</button>
+      <div class="b-name" style="margin-top:12px" dir="auto">${esc(e.name)}</div>
+      <div class="note" style="margin-top:4px">${esc((KINDS[e.kind] || e.kind).replace(/s$/, ""))}${e.role ? " · " + esc(e.role) : ""} · ${e.meetings} meeting${e.meetings === 1 ? "" : "s"}${e.aliases.length ? ` · also: <span dir="auto">${esc(e.aliases.join(", "))}</span>` : ""}</div></div>`
+    + p.mentions.map((m) => `<div class="b-tl"><div class="d">${when(m.created)}</div><button class="t" data-m="${esc(m.meeting_id)}" data-t="0">${esc(m.title)}</button>
+        ${m.summary ? `<div class="s" dir="auto">${esc(m.summary)}</div>` : ""}
+        ${m.items.map((it) => `<div class="b-item"><b>${it.kind === "decision" ? "DECISION" : "ACTION"}</b>${esc(it.text)}${it.owner ? " · " + esc(it.owner) : ""}${it.due ? " · due " + esc(it.due) : ""}</div>`).join("")}
+        ${m.timestamps.length ? `<div class="b-tsrow">${m.timestamps.map((t) => `<button class="b-cite" data-m="${esc(m.meeting_id)}" data-t="${t}">${ts(t)}</button>`).join("")}</div>` : ""}</div>`).join("");
+  $("b-back").onclick = () => { brainScope = null; renderBrainStatus(); renderBrainHome(); };
+  wireBrainLinks();
+  window.scrollTo(0, 0);
+}
+function wireBrainLinks() { $("b-body").querySelectorAll("[data-m]").forEach((el) => (el.onclick = () => openAt(el.dataset.m, Number(el.dataset.t || 0)))); }
+function renderAnswer(a) {
+  brainView = "answer";
+  const byN = new Map(a.citations.map((c) => [c.n, c]));
+  const body = md(a.answer).replace(/\[#(\d+)\]/g, (all, n) => { const c = byN.get(Number(n)); return c ? `<button class="b-cite" data-m="${esc(c.meeting_id)}" data-t="${c.start_s}">${esc(shortT(c.title))} · ${ts(c.start_s)}</button>` : ""; });
+  $("b-body").innerHTML = `<div class="section"><button class="chip" id="b-back">← ALL</button><div class="b-q" style="margin-top:14px" dir="auto">${esc(a.question)}</div>
+    <div class="label" style="margin-bottom:10px">${esc(a.provider)}${a.scope ? " · only " + esc(a.scope) : ""} · ${when(a.created)}</div>
+    <div class="md" dir="auto">${body}</div>
+    ${a.citations.length ? `<div class="label" style="margin:18px 0 4px">Sources</div>` + a.citations.map((c) => `<button class="b-src" data-m="${esc(c.meeting_id)}" data-t="${c.start_s}">${esc(c.title)} · ${ts(c.start_s)}${c.speaker ? " · " + esc(c.speaker) : ""}</button>`).join("") : ""}</div>`;
+  $("b-back").onclick = renderBrainHome;
+  wireBrainLinks();
+  window.scrollTo(0, 0);
+}
+async function brainAsk() {
+  const q = $("b-q").value.trim();
+  if (!q || brainAsking) return;
+  try {
+    const before = await api("/api/brain/asks").catch(() => []);
+    brainAsksBefore = before.length ? before[0].id : 0;
+    await post("/api/brain/ask", { question: q, entity: brainScope });
+    brainAsking = true;
+    $("b-q").value = "";
+    $("b-ask").disabled = true; $("b-ask").textContent = "…";
+    brainView = "answer";
+    $("b-body").innerHTML = `<div class="section"><div class="b-q" dir="auto">${esc(q)}</div><div class="label">// searching your meetings on the laptop, then asking ${esc(settings ? providerLabel() : "the writer")}…</div></div>`;
+    clearTimeout(brainT); brainT = setTimeout(brainTick, 2500);
+  } catch (e) { toast(e.message, true); }
+}
+
+// ───── theme (DARK / LIGHT button; follows the phone until pressed) ─────
+const sysDark = () => matchMedia("(prefers-color-scheme: dark)").matches;
+function themeIsDark() { const t = document.documentElement.dataset.theme; return t ? t === "dark" : sysDark(); }
+function renderThemeBtn() { $("theme").textContent = themeIsDark() ? "LIGHT" : "DARK"; }
+function toggleTheme() {
+  const t = themeIsDark() ? "light" : "dark";
+  document.documentElement.dataset.theme = t;
+  try { localStorage.setItem("mahdar-theme", t); } catch {}
+  renderThemeBtn();
+}
+
+// ───── wiring ─────
+document.querySelectorAll(".tabbar button").forEach((b) => (b.onclick = () => show(b.dataset.v)));
+document.querySelectorAll("#seg button").forEach((b) => (b.onclick = () => setSub(b.dataset.s)));
+document.querySelectorAll(".seg-ctl").forEach((g) => g.querySelectorAll("button").forEach((b) => (b.onclick = () => segSet(g.id, b.dataset.v))));
+$("rows").onclick = (e) => { const r = e.target.closest(".row"); if (r) openMeeting(r.dataset.id); };
+$("search").oninput = renderList;
+$("back").onclick = () => show("list");
+$("menu").onclick = meetingMenu;
+$("top-title").onclick = meetingMenu;
+$("rec-btn").onclick = toggleRec;
+$("paste").onclick = pasteAudio;
+$("file").onchange = async (e) => { const f = e.target.files[0]; if (f) { await upload(f, f.name); e.target.value = ""; } };
+$("ask-btn").onclick = ask;
+$("ask-input").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } };
+$("st-save").onclick = saveSettings;
+$("b-engine").onchange = () => {
+  const v = $("b-engine").value;
+  const local = settings.provider.kind === "local" ? settings.provider : { kind: "local", base_url: "http://127.0.0.1:11434/v1", model: "gemma4-it:12b" };
+  const effort = settings.provider.kind === "claude_api" ? settings.provider.effort || "" : "high";
+  saveQuick({ brain_provider: v === "same" ? null : v === "local" ? local : { kind: "claude_api", model: v.slice(4), effort } });
+};
+$("theme").onclick = toggleTheme;
+$("b-ask").onclick = brainAsk;
+$("b-index").onclick = () => brainIndex(null);
+$("b-scope").onclick = () => { brainScope = null; renderBrainStatus(); };
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", renderThemeBtn);
+renderThemeBtn();
+$("mon-filter").addEventListener("click", () => setTimeout(renderMonitor));
+$("p-play").onclick = () => { const a = audio(); if (!ensureAudio()) return toast("Audio not ready yet", true); a.paused ? a.play().catch((e) => toast(e.message, true)) : a.pause(); };
+$("p-speed").onclick = () => { const a = audio(), s = [1, 1.25, 1.5, 2]; a.playbackRate = s[(s.indexOf(a.playbackRate) + 1) % s.length]; $("p-speed").textContent = a.playbackRate + "×"; };
+$("p-range").oninput = () => { dragging = true; const a = audio(), d = isFinite(a.duration) ? a.duration : current?.duration_s || 0; $("p-cur").textContent = ts((d * $("p-range").value) / 1000); };
+$("p-range").onchange = () => { dragging = false; ensureAudio(); const a = audio(), d = isFinite(a.duration) ? a.duration : current?.duration_s || 0; seek((d * $("p-range").value) / 1000, false); };
+["timeupdate", "play", "pause", "loadedmetadata", "durationchange"].forEach((ev) => audio().addEventListener(ev, () => { updatePlayer(); highlightNow(); }));
+audio().addEventListener("error", () => { if (audio().src) { dlog(`AUDIO ERROR code=${audio().error && audio().error.code}`); toast("Couldn't load the audio", true); } });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { schedulePoll(200); if (view === "monitor") loadMonitor(); } });
+window.addEventListener("beforeunload", (e) => { if (rec) { e.preventDefault(); e.returnValue = ""; } });
+if (location.search.includes("t=")) history.replaceState(null, "", "/"); // the token now lives in a cookie
+recNote();
+show("list");
+api("/api/settings").then((s) => (settings = s)).catch(() => {});
+api("/api/templates").then((t) => (templates = t)).catch(() => {});
+schedulePoll(3000);
+</script>
+</body>
+</html>

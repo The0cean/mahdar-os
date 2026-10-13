@@ -1,0 +1,8 @@
+node_modules/
+dist/
+target/
+src-tauri/gen/
+
+# transcribe.cpp v0.3.1 native build (52 MB): download transcribe-native-0.3.1-windows-x86_64-cpu-vulkan.tar.gz from github.com/handy-computer/transcribe.cpp releases into src-tauri/native/
+src-tauri/native/*.dll
+Mahdar-setup.exe

@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MAHDAR</title>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">MAHDAR <span class="brand-ar">محضر</span></div>
+      <nav class="step-ind">
+        <span class="step active" data-view="library">// 01 Library</span>
+        <span class="step" data-view="meeting">// 02 Meeting</span>
+        <span class="step" data-view="settings">// 03 Settings</span>
+        <span class="step" data-view="brain">// 04 Brain</span>
+        <span class="step" data-view="monitor">// 05 Monitor</span>
+      </nav>
+      <div class="controls">
+        <button id="btn-theme" class="ctrl-btn">DARK</button>
+        <button id="zoom-in" class="ctrl-btn" title="Larger text">+</button>
+        <button id="zoom-out" class="ctrl-btn" title="Smaller text">-</button>
+      </div>
+    </header>
+
+    <div class="app">
+      <!-- ───────── 01 LIBRARY ───────── -->
+      <section id="v-library" class="view active">
+        <div class="dash">
+          <div class="dash-hero">
+            <h1>Meeting <span>minutes</span>,<br />on your laptop.</h1>
+            <p>// Arabic + English transcription with Cohere Transcribe Arabic, running locally on the Radeon GPU. Minutes, notes and action items in one click.</p>
+          </div>
+
+          <div class="metrics">
+            <div class="metric"><div class="label">Meetings</div><div class="val" id="mt-count">0</div></div>
+            <div class="metric"><div class="label">Hours transcribed</div><div class="val" id="mt-hours">0.0</div></div>
+            <div class="metric"><div class="label">Outputs written</div><div class="val" id="mt-outputs">0</div></div>
+            <div class="metric"><div class="label">Speech engine</div><div class="val acc" id="mt-engine">—</div></div>
+          </div>
+
+          <div class="dash-grid">
+            <div class="upload-console">
+              <div class="heading">01 / New meeting</div>
+              <div id="drop" class="drop">
+                <div class="icon">↓</div>
+                <div class="msg">Drop recordings here, or click to import</div>
+                <div class="hint">m4a · mp3 · wav · ogg · flac · mp4 · several at once</div>
+                <button id="btn-paste" class="hbtn drop-paste" title="Paste recordings copied in File Explorer">PASTE FROM CLIPBOARD · CTRL+V</button>
+              </div>
+              <div class="console-row">
+                <span class="num">02 / REC</span>
+                <input id="rec-title-quick" placeholder="// meeting title (optional)" />
+                <button id="btn-record" class="go rec"><span class="rec-dot"></span>RECORD</button>
+              </div>
+            </div>
+            <div>
+              <div class="section-title">System</div>
+              <div id="sys" class="sys-grid"></div>
+            </div>
+          </div>
+
+          <div class="section-title list-title">
+            <span>Meetings</span>
+            <input id="search" class="hsearch" placeholder="// search" />
+          </div>
+          <table class="dtable">
+            <thead><tr><th class="num-col">#</th><th>Title</th><th>Date</th><th class="r">Length</th><th class="r">Outputs</th><th>Status</th><th></th></tr></thead>
+            <tbody id="meeting-rows"></tbody>
+          </table>
+          <div id="setup-warning" class="setup-warning hidden"></div>
+        </div>
+      </section>
+
+      <!-- ───────── 02 MEETING ───────── -->
+      <section id="v-meeting" class="view">
+        <div id="no-meeting" class="upload-wrap">
+          <div class="placeholder">// select a meeting in <a data-view-link="library">01 Library</a></div>
+        </div>
+        <div id="meeting-layout" class="extract-layout hidden">
+          <div class="extract-left">
+            <div class="pdf-head">
+              <span class="fname" id="m-fname" dir="auto"></span>
+              <span class="info" id="m-info"></span>
+              <span class="sel" id="m-flags"></span>
+              <input id="t-search" class="hsearch" placeholder="// find" />
+              <button id="btn-fix" class="hbtn accent hidden" title="Re-run the unclear (⚠) parts on smaller pieces">FIX UNCLEAR</button>
+              <button id="btn-follow" class="hbtn" title="Scroll the transcript with the audio">FOLLOW</button>
+              <button id="btn-export-transcript" class="hbtn" title="Save the transcript as a Word document">WORD</button>
+              <button id="btn-brain-index" class="hbtn" title="Add this meeting to the Brain (search + tags across meetings)">BRAIN</button>
+              <button id="btn-retranscribe" class="hbtn">RE-TRANSCRIBE</button>
+              <button id="btn-delete" class="hbtn danger">DELETE</button>
+            </div>
+            <div class="player" id="player-bar">
+              <button id="p-play" class="p-btn" title="Play / pause (space)">▶</button>
+              <span id="p-cur" class="p-time">00:00</span>
+              <div id="p-track" class="p-track"><div id="p-fill" class="p-fill"></div></div>
+              <span id="p-dur" class="p-time">00:00</span>
+              <button id="p-speed" class="hbtn" title="Playback speed">1×</button>
+              <span id="p-msg" class="p-msg"></span>
+              <audio id="audio" preload="metadata"></audio>
+            </div>
+            <div id="transcript" class="transcript"></div>
+          </div>
+
+          <div class="extract-right">
+            <div class="mode-row" id="mode-row">
+              <div class="fmt-opt active" data-mode="outputs">OUTPUTS</div><div class="fmt-opt" data-mode="ask">ASK</div>
+            </div>
+            <div class="extract-controls">
+              <div class="field"><label>01 / Title</label><input id="m-title" dir="auto" /></div>
+              <div class="field"><label>02 / Output</label><select id="o-template"></select></div>
+              <div class="field-row">
+                <div class="field"><label>03 / Language</label>
+                  <select id="o-lang"><option value="en">English</option><option value="ar">Arabic</option><option value="auto">Same as meeting</option></select>
+                </div>
+                <div class="field"><label>04 / Engine</label>
+                  <select id="o-provider">
+<optgroup label="Claude API · your credits">
+                      <option value="api:claude-haiku-5-5">Haiku 5.5 · API</option>
+                      <option value="api:claude-sonnet-5-5">Sonnet 5.5 · API</option>
+                      <option value="api:claude-opus-5-5">Opus 5.5 · API</option>
+                    </optgroup>
+                    <optgroup label="Other">
+                    <option value="claude:haiku">Haiku · Claude Code</option>
+                    <option value="claude:sonnet">Sonnet · Claude Code</option>
+                    <option value="cursor">Cursor · cloud</option>
+                    <option value="local">Local · private</option>
+                    </optgroup>
+                  </select>
+                </div>
+              </div>
+              <div id="gen-controls">
+                <button id="btn-generate" class="go-btn">GENERATE</button>
+              </div>
+              <div id="o-note" class="field-note"></div>
+            </div>
+
+            <div id="ask-panel" class="ask-panel hidden">
+              <div id="chat" class="chat"></div>
+              <div class="ask-row">
+                <textarea id="ask-input" rows="2" dir="auto" placeholder="// ask about this meeting: who agreed to what? which limits were mentioned?"></textarea>
+                <div class="ask-actions">
+                  <button id="btn-ask" class="go-btn">ASK</button>
+                  <button id="btn-clear-chat" class="hbtn">CLEAR</button>
+                </div>
+              </div>
+            </div>
+            <div class="timeline" id="timeline-panel">
+              <div id="tl" class="tl-block">
+                <div class="tl-status" id="tl-status"></div>
+                <div class="tl-bar"><div class="tl-fill" id="tl-fill"></div></div>
+                <div class="tl-events" id="tl-events"></div>
+              </div>
+              <div id="results" class="results">
+                <div class="res-empty" id="res-empty">// no outputs yet<br />// pick 02 / OUTPUT and press GENERATE</div>
+                <div id="res-body">
+                <div class="res-tabs" id="res-tabs"></div>
+                <div class="res-head">
+                  <span class="res-title" id="res-title"></span>
+                  <button class="res-btn" id="res-copy">COPY</button>
+                  <button class="res-btn" id="res-word">WORD</button>
+                  <button class="res-btn" id="res-pdf">PDF</button>
+                  <button class="res-btn" id="res-save">.MD</button>
+                  <button class="res-btn danger" id="res-del">DELETE</button>
+                </div>
+                <div class="res-meta" id="res-meta"></div>
+                <div class="res-text md" id="res-text" dir="auto"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ───────── 03 SETTINGS ───────── -->
+      <section id="v-settings" class="view">
+        <div class="export-view">
+          <div class="section-title">Phone · Mahdar Remote</div>
+          <div class="export-card">
+            <div class="phone-grid">
+              <div>
+                <div class="field"><label>P1 / Phone access</label>
+                  <div class="fmt-row" id="s-remote"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
+                </div>
+                <div class="field"><label>P2 / Port</label><input id="s-remote-port" inputmode="numeric" /></div>
+                <div id="remote-urls" class="sys-grid"></div>
+                <div class="input-row" style="margin-top:10px">
+                  <button id="btn-remote-https" class="hbtn">SET UP HTTPS (TAILSCALE)</button>
+                  <button id="btn-remote-token" class="hbtn danger" title="Phones paired before will need to scan again">NEW PAIRING CODE</button>
+                </div>
+              </div>
+              <div class="qr-box" id="remote-qr"></div>
+            </div>
+            <div class="field-note">// Scan the QR code with the iPhone camera → it opens Mahdar on the phone, already paired. Add it to the Home Screen (Share → Add to Home Screen).<br />
+              // Works on the same Wi‑Fi, or anywhere over Tailscale. Recording in the browser needs the HTTPS address; on plain Wi‑Fi you can upload Voice Memos instead.</div>
+          </div>
+
+          <div class="section-title">Speech model</div>
+          <div class="export-card">
+            <div id="model-status" class="sys-grid"></div>
+            <div class="field"><label>01 / Model file</label><input id="s-model" /></div>
+            <div class="field-row">
+              <div class="field"><label>02 / Run on</label>
+                <div class="fmt-row" id="s-backend">
+                  <div class="fmt-opt" data-v="vulkan">GPU</div><div class="fmt-opt" data-v="cpu">CPU</div><div class="fmt-opt" data-v="auto">AUTO</div>
+                </div>
+              </div>
+              <div class="field"><label>03 / Meeting language</label>
+                <div class="fmt-row" id="s-language">
+                  <div class="fmt-opt" data-v="ar">ARABIC + EN</div><div class="fmt-opt" data-v="en">ENGLISH</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="section-title">Speakers</div>
+          <div class="export-card">
+            <div id="diar-status" class="sys-grid"></div>
+            <div class="field"><label>04 / Detect speakers</label>
+              <div class="fmt-row" id="s-speakers"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
+            </div>
+            <div class="field-note">// NVIDIA Sortformer, up to 4 speakers, runs on this laptop. Click a speaker label in a transcript to name them; names flow into the minutes.</div>
+          </div>
+
+          <div class="section-title">Watch folder</div>
+          <div class="export-card">
+            <div class="field"><label>05 / Folder</label>
+              <div class="input-row"><input id="s-watch" readonly placeholder="// off" /><button id="btn-watch-pick" class="hbtn">CHOOSE</button><button id="btn-watch-clear" class="hbtn">OFF</button></div>
+            </div>
+            <div class="field-note">// New recordings that land here (or in its subfolders) are imported and transcribed automatically, e.g. your phone shortcut's iCloud folder. Files already there when you choose it are skipped. Checked every 20 s.</div>
+          </div>
+
+          <div class="section-title">Names &amp; terms</div>
+          <div class="export-card">
+            <div class="field"><label>06 / Glossary</label><textarea id="s-glossary" rows="4" dir="auto" placeholder="// one per line: a name or term, optionally = how it is written"></textarea></div>
+            <div class="field-note">// Given to the minutes writer and ASK so names and terms are spelled right.</div>
+          </div>
+
+          <div class="section-title">Claude API</div>
+          <div class="export-card">
+            <div id="api-status" class="sys-grid"></div>
+            <div class="field"><label>07 / API key</label>
+              <div class="input-row"><input id="s-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="// paste a key from platform.claude.com (sk-ant-…)" /><button id="btn-api-save" class="hbtn accent">SAVE KEY</button><button id="btn-api-test" class="hbtn">TEST</button><button id="btn-api-del" class="hbtn danger">REMOVE</button></div>
+            </div>
+            <div class="field"><label>07b / Effort</label>
+              <div class="fmt-row" id="s-effort"><div class="fmt-opt" data-v="">DEFAULT</div><div class="fmt-opt" data-v="low">LOW</div><div class="fmt-opt" data-v="medium">MEDIUM</div><div class="fmt-opt" data-v="high">HIGH</div></div>
+            </div>
+            <div class="field-note">// Used when Engine = Haiku / Sonnet / Opus 5.5 · API. Higher effort thinks more: better minutes, more tokens. The key is checked, then kept in the Windows Credential Manager, never in Mahdar's files or log. A key already saved in Mizan is used too.<br />
+              // Cloud: the transcript is sent to Anthropic and billed to your API credits. Spend is shown in // 04 Monitor.</div>
+          </div>
+
+          <div class="section-title">Watchdog</div>
+          <div class="export-card">
+            <div class="field"><label>08 / Keep Mahdar running</label>
+              <div class="fmt-row" id="s-watchdog"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
+            </div>
+            <div class="field-note">// A small background helper restarts Mahdar if it crashes or hangs (interrupted transcriptions resume) and starts it when you log in to Windows, so the phone can always reach it. Closing Mahdar yourself is respected. Its activity is in // 04 Monitor.</div>
+          </div>
+
+          <div class="section-title">Local minutes writer</div>
+          <div class="export-card">
+            <div class="field-row">
+              <div class="field"><label>09 / Server URL</label><input id="s-local-url" /></div>
+              <div class="field"><label>10 / Model</label><input id="s-local-model" /></div>
+            </div>
+            <div class="field-note">// Used when Engine = Local model. Start it first: <code>flm serve gemma4-it:12b</code>. Nothing leaves the laptop.</div>
+          </div>
+
+          <div class="section-title">Cursor writer</div>
+          <div class="export-card">
+            <div class="field"><label>11 / Cursor model</label><input id="s-cursor-model" placeholder="// blank = your account's default (e.g. auto, gpt-5, sonnet-4.5)" /></div>
+            <div class="field-note">// Used when Engine = Cursor. Runs Cursor's CLI (<code>agent -p</code>) in read-only ask mode with your Cursor login.<br />
+              // Install once: <code>irm 'https://cursor.com/install?win32=true' | iex</code>, then <code>agent login</code>. See models: <code>agent --list-models</code>.</div>
+          </div>
+
+          <div class="section-title">Custom outputs</div>
+          <div class="export-card">
+            <div id="custom-templates"></div>
+            <div class="field"><label>12 / Name</label><input id="ct-name" placeholder="// template name" /></div>
+            <div class="field"><label>13 / Instructions</label><textarea id="ct-prompt" rows="3" placeholder="// what should the output contain?"></textarea></div>
+            <button id="btn-add-template" class="go-btn ghost">ADD OUTPUT TYPE</button>
+          </div>
+
+          <button id="btn-save-settings" class="go-btn">SAVE SETTINGS</button>
+          <div class="field-note" id="s-data-dir"></div>
+        </div>
+      </section>
+
+      <!-- ───────── 04 BRAIN ───────── -->
+      <section id="v-brain" class="view">
+        <div class="brain-top">
+          <div class="brain-ask">
+            <button id="b-scope" class="b-scope hidden" title="Asking only about this; click to ask across everything"></button>
+            <input id="b-q" dir="auto" placeholder="// ask anything across your meetings" />
+            <button id="b-ask" class="go">ASK</button>
+          </div>
+          <div class="b-status"><span id="b-status-text">// …</span><select id="b-engine" class="b-engine" title="Engine for the Brain (tagging and questions)"><option value="same">Engine: same as minutes</option><option value="local">Engine: Local · private</option><option value="api:claude-haiku-5-5">Engine: Haiku 5.5 · API</option><option value="api:claude-sonnet-5-5">Engine: Sonnet 5.5 · API</option><option value="api:claude-opus-5-5">Engine: Opus 5.5 · API</option></select><button id="b-index-all" class="hbtn accent">INDEX ALL</button></div>
+        </div>
+        <div class="brain-body">
+          <aside class="b-side">
+            <input id="b-filter" class="hsearch" placeholder="// find a person, client, topic" />
+            <div id="b-entities"></div>
+          </aside>
+          <div class="b-main" id="b-main"></div>
+        </div>
+      </section>
+
+      <!-- ───────── 05 MONITOR ───────── -->
+      <section id="v-monitor" class="view">
+        <div class="dash">
+          <div class="metrics">
+            <div class="metric"><div class="label">Up for</div><div class="val" id="mon-uptime">—</div></div>
+            <div class="metric"><div class="label">API spend today</div><div class="val acc" id="mon-today">$0.00</div></div>
+            <div class="metric"><div class="label">API spend this month</div><div class="val" id="mon-month">$0.00</div></div>
+            <div class="metric"><div class="label">API spend total</div><div class="val" id="mon-total">$0.00</div></div>
+          </div>
+          <div class="dash-grid mon-grid">
+            <div>
+              <div class="section-title">Status</div>
+              <div id="mon-status" class="sys-grid"></div>
+            </div>
+            <div>
+              <div class="section-title">Jobs</div>
+              <div id="mon-jobs" class="sys-grid"></div>
+              <div class="field-note">// spend is priced by Mahdar from token counts; your real balance is on platform.claude.com</div>
+            </div>
+          </div>
+          <div class="section-title list-title">
+            <span>Activity log</span>
+            <span class="mon-tools">
+              <span class="fmt-row" id="mon-filter"><span class="fmt-opt active" data-v="all">ALL</span><span class="fmt-opt" data-v="warn">WARNINGS</span><span class="fmt-opt" data-v="error">ERRORS</span></span>
+              <input id="mon-search" class="hsearch" placeholder="// filter" />
+              <button id="btn-log-folder" class="hbtn">OPEN LOG FOLDER</button>
+            </span>
+          </div>
+          <table class="dtable mon-log">
+            <thead><tr><th style="width:150px">Time</th><th style="width:64px">Level</th><th style="width:96px">Source</th><th>Event</th></tr></thead>
+            <tbody id="mon-rows"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <div id="rec-overlay" class="overlay hidden">
+      <div class="rec-card">
+        <div class="heading">● Recording</div>
+        <div id="rec-time" class="rec-time">00:00</div>
+        <div class="tl-bar big"><div class="tl-fill" id="rec-level"></div></div>
+        <div class="field"><label>Title</label><input id="rec-title" placeholder="// optional" /></div>
+        <button id="btn-stop" class="go-btn">STOP &amp; TRANSCRIBE</button>
+        <div class="field-note">// audio stays on this laptop</div>
+      </div>
+    </div>
+
+    <div id="spk-pop" class="spk-pop hidden">
+      <label>Name speaker</label>
+      <input id="spk-name" placeholder="// speaker name" dir="auto" />
+      <label>This line is</label>
+      <div id="spk-assign" class="spk-assign"></div>
+    </div>
+    <div id="print-area" class="print-area"></div>
+    <div id="toast" class="toast hidden"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

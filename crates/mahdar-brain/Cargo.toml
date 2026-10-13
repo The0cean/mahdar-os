@@ -1,0 +1,14 @@
+[package]
+name = "mahdar-brain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mahdar Brain: a local index of meetings (or any timestamped documents) for search, tags and questions across them"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+fastembed = { version = "7.1", default-features = false, features = ["ort-download-binaries-rustls-tls"] }
