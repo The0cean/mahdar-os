@@ -9,7 +9,7 @@ use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 
 use crate::asr::Backend;
-use crate::summarize::{Provider, Template};
+use crate::summarize::{LocalOptions, Provider, Template};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Chunk {
@@ -153,6 +153,17 @@ pub struct Settings {
     /// Engine for the Brain (tagging and questions across meetings); None = same as `provider`.
     #[serde(default, deserialize_with = "crate::summarize::provider_or_none")]
     pub brain_provider: Option<Provider>,
+    /// Output preselected in a meeting's output panel.
+    #[serde(default = "default_template")]
+    pub default_template: String,
+    /// Output written automatically when a transcription finishes; empty = none.
+    #[serde(default)]
+    pub auto_output: String,
+    /// Add each newly transcribed meeting to the Brain.
+    #[serde(default)]
+    pub auto_index: bool,
+    #[serde(default)]
+    pub local: LocalOptions,
 }
 
 impl Settings {
@@ -164,6 +175,10 @@ impl Settings {
 
 fn default_port() -> u16 {
     8787
+}
+
+fn default_template() -> String {
+    "mom".into()
 }
 
 fn yes() -> bool {
@@ -188,6 +203,10 @@ impl Settings {
             remote_token: String::new(),
             watchdog: false,
             brain_provider: None,
+            default_template: default_template(),
+            auto_output: String::new(),
+            auto_index: false,
+            local: LocalOptions::default(),
         }
     }
 }
@@ -283,5 +302,22 @@ impl Store {
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
         fs::write(self.root.join("settings.json"), serde_json::to_vec_pretty(s)?)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_get_new_defaults() {
+        let old = r#"{"model_path":"m.gguf","backend":"vulkan","language":"ar","output_language":"en",
+            "provider":{"kind":"local","base_url":"http://127.0.0.1:11434/v1","model":"gemma4-it:12b"}}"#;
+        let s: Settings = serde_json::from_str(old).unwrap();
+        assert_eq!(s.default_template, "mom");
+        assert!(s.auto_output.is_empty() && !s.auto_index);
+        assert_eq!((s.local.temperature, s.local.context, s.local.autostart, s.local.timeout_min), (0.2, 65_536, true, 30));
+        let partial: Settings = serde_json::from_str(&old.replace("}}", r#"},"local":{"temperature":0.5}}"#)).unwrap();
+        assert_eq!((partial.local.temperature, partial.local.timeout_min), (0.5, 30));
     }
 }

@@ -260,6 +260,12 @@ fn monitor_snapshot(app: AppHandle) -> Monitor {
 }
 
 #[tauri::command]
+fn open_data_folder(state: State<AppState>) -> CmdResult<()> {
+    std::process::Command::new("explorer").arg(state.store.root()).spawn().map_err(err)?;
+    Ok(())
+}
+
+#[tauri::command]
 fn open_log_folder(state: State<AppState>) -> CmdResult<()> {
     let dir = log::log_dir(state.store.root());
     std::process::Command::new("explorer").arg(dir).spawn().map_err(err)?;
@@ -545,17 +551,40 @@ fn spawn_transcription(app: AppHandle, id: String, input: Result<PathBuf, Vec<f3
             state.store.save_meeting(&m)?;
             Ok(())
         };
-        if let Err(e) = run() {
-            log::error("transcribe", format!("failed \u{201c}{title}\u{201d}: {e:#}"));
-            if let Ok(mut m) = state.store.load_meeting(&id) {
-                m.status = Status::Failed;
-                m.error = Some(format!("{e:#}"));
-                let _ = state.store.save_meeting(&m);
+        let ok = match run() {
+            Ok(()) => true,
+            Err(e) => {
+                log::error("transcribe", format!("failed \u{201c}{title}\u{201d}: {e:#}"));
+                if let Ok(mut m) = state.store.load_meeting(&id) {
+                    m.status = Status::Failed;
+                    m.error = Some(format!("{e:#}"));
+                    let _ = state.store.save_meeting(&m);
+                }
+                false
             }
-        }
+        };
         clear_progress(&app, &id);
         let _ = app.emit("meeting-updated", id.clone());
+        if ok {
+            after_transcription(&app, &id);
+        }
     });
+}
+
+/// Settings → Automation: write an output and/or add the meeting to the Brain once its
+/// transcript is ready. Failures are logged; the transcript itself is already saved.
+fn after_transcription(app: &AppHandle, id: &str) {
+    let s = app.state::<AppState>().store.load_settings();
+    if !s.auto_output.is_empty() {
+        if let Err(e) = do_generate(app, id, &s.auto_output) {
+            log::warn("writer", format!("automatic output skipped: {e}"));
+        }
+    }
+    if s.auto_index {
+        if let Err(e) = brain::start_index(app, Some(vec![id.to_string()])) {
+            log::warn("brain", format!("automatic indexing skipped: {e}"));
+        }
+    }
 }
 
 /// Create a meeting for an audio file and start transcribing it.
@@ -729,11 +758,12 @@ pub(crate) fn write_with_provider(app: &AppHandle, id: &str, what: &str, prompt:
 /// Like [`write_with_provider`], with an explicit engine (the Brain has its own setting).
 pub(crate) fn write_with(app: &AppHandle, provider: &Provider, id: &str, what: &str, prompt: &str) -> CmdResult<(String, String)> {
     let state = app.state::<AppState>();
+    let local = state.store.load_settings().local;
     let label = provider.label();
     log::info("writer", format!("{what} · {label} · {} k chars", prompt.chars().count() / 1000));
     let t0 = Instant::now();
     if let Provider::Local { base_url, model } = provider {
-        let child = summarize::ensure_local_server(base_url, model, || {
+        let child = summarize::ensure_local_server(base_url, model, &local, || {
             log::info("writer", format!("starting local model {model}"));
             report(app, Progress { id: id.to_string(), stage: "starting local model".into(), done: 0, total: 0 });
             let _ = app.emit("gen-stage", (id.to_string(), "starting local model"));
@@ -751,7 +781,7 @@ pub(crate) fn write_with(app: &AppHandle, provider: &Provider, id: &str, what: &
         let _ = app.emit("gen-stage", (id.to_string(), "writing"));
     }
     report(app, Progress { id: id.to_string(), stage: "writing".into(), done: 0, total: 0 });
-    let res = summarize::generate(provider, prompt);
+    let res = summarize::generate(provider, prompt, &local);
     clear_progress(app, id);
     let text = res.map_err(|e| {
         log::error("writer", format!("{what} failed after {} s: {e:#}", t0.elapsed().as_secs()));
@@ -998,6 +1028,7 @@ pub fn run() {
             brain::brain_ask,
             brain::brain_asks,
             open_log_folder,
+            open_data_folder,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Mahdar")

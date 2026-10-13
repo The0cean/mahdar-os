@@ -11,9 +11,9 @@
       <nav class="step-ind">
         <span class="step active" data-view="library">// 01 Library</span>
         <span class="step" data-view="meeting">// 02 Meeting</span>
-        <span class="step" data-view="settings">// 03 Settings</span>
-        <span class="step" data-view="brain">// 04 Brain</span>
-        <span class="step" data-view="monitor">// 05 Monitor</span>
+        <span class="step" data-view="brain">// 03 Brain</span>
+        <span class="step" data-view="monitor">// 04 Monitor</span>
+        <span class="step" data-view="settings">// 05 Settings</span>
       </nav>
       <div class="controls">
         <button id="btn-theme" class="ctrl-btn">DARK</button>
@@ -163,108 +163,7 @@
         </div>
       </section>
 
-      <!-- ───────── 03 SETTINGS ───────── -->
-      <section id="v-settings" class="view">
-        <div class="export-view">
-          <div class="section-title">Phone · Mahdar Remote</div>
-          <div class="export-card">
-            <div class="phone-grid">
-              <div>
-                <div class="field"><label>P1 / Phone access</label>
-                  <div class="fmt-row" id="s-remote"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
-                </div>
-                <div class="field"><label>P2 / Port</label><input id="s-remote-port" inputmode="numeric" /></div>
-                <div id="remote-urls" class="sys-grid"></div>
-                <div class="input-row" style="margin-top:10px">
-                  <button id="btn-remote-https" class="hbtn">SET UP HTTPS (TAILSCALE)</button>
-                  <button id="btn-remote-token" class="hbtn danger" title="Phones paired before will need to scan again">NEW PAIRING CODE</button>
-                </div>
-              </div>
-              <div class="qr-box" id="remote-qr"></div>
-            </div>
-            <div class="field-note">// Scan the QR code with the iPhone camera → it opens Mahdar on the phone, already paired. Add it to the Home Screen (Share → Add to Home Screen).<br />
-              // Works on the same Wi‑Fi, or anywhere over Tailscale. Recording in the browser needs the HTTPS address; on plain Wi‑Fi you can upload Voice Memos instead.</div>
-          </div>
-
-          <div class="section-title">Speech model</div>
-          <div class="export-card">
-            <div id="model-status" class="sys-grid"></div>
-            <div class="field"><label>01 / Model file</label><input id="s-model" /></div>
-            <div class="field-row">
-              <div class="field"><label>02 / Run on</label>
-                <div class="fmt-row" id="s-backend">
-                  <div class="fmt-opt" data-v="vulkan">GPU</div><div class="fmt-opt" data-v="cpu">CPU</div><div class="fmt-opt" data-v="auto">AUTO</div>
-                </div>
-              </div>
-              <div class="field"><label>03 / Meeting language</label>
-                <div class="fmt-row" id="s-language">
-                  <div class="fmt-opt" data-v="ar">ARABIC + EN</div><div class="fmt-opt" data-v="en">ENGLISH</div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="section-title">Speakers</div>
-          <div class="export-card">
-            <div id="diar-status" class="sys-grid"></div>
-            <div class="field"><label>04 / Detect speakers</label>
-              <div class="fmt-row" id="s-speakers"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
-            </div>
-            <div class="field-note">// NVIDIA Sortformer, up to 4 speakers, runs on this laptop. Click a speaker label in a transcript to name them; names flow into the minutes.</div>
-          </div>
-
-          <div class="section-title">Watch folder</div>
-          <div class="export-card">
-            <div class="field"><label>05 / Folder</label>
-              <div class="input-row"><input id="s-watch" readonly placeholder="// off" /><button id="btn-watch-pick" class="hbtn">CHOOSE</button><button id="btn-watch-clear" class="hbtn">OFF</button></div>
-            </div>
-            <div class="field-note">// New recordings that land here (or in its subfolders) are imported and transcribed automatically, e.g. your phone shortcut's iCloud folder. Files already there when you choose it are skipped. Checked every 20 s.</div>
-          </div>
-
-          <div class="section-title">Names &amp; terms</div>
-          <div class="export-card">
-            <div class="field"><label>06 / Glossary</label><textarea id="s-glossary" rows="4" dir="auto" placeholder="// one per line: a name or term, optionally = how it is written"></textarea></div>
-            <div class="field-note">// Given to the minutes writer and ASK so names and terms are spelled right.</div>
-          </div>
-
-          <div class="section-title">Watchdog</div>
-          <div class="export-card">
-            <div class="field"><label>08 / Keep Mahdar running</label>
-              <div class="fmt-row" id="s-watchdog"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
-            </div>
-            <div class="field-note">// A small background helper restarts Mahdar if it crashes or hangs (interrupted transcriptions resume) and starts it when you log in to Windows, so the phone can always reach it. Closing Mahdar yourself is respected. Its activity is in // 04 Monitor.</div>
-          </div>
-
-          <div class="section-title">Local minutes writer</div>
-          <div class="export-card">
-            <div class="field-row">
-              <div class="field"><label>09 / Server URL</label><input id="s-local-url" /></div>
-              <div class="field"><label>10 / Model</label><input id="s-local-model" /></div>
-            </div>
-            <div class="field-note">// Used when Engine = Local model. Start it first: <code>flm serve gemma4-it:12b</code>. Nothing leaves the laptop.</div>
-          </div>
-
-          <div class="section-title">Cursor writer</div>
-          <div class="export-card">
-            <div class="field"><label>11 / Cursor model</label><input id="s-cursor-model" placeholder="// blank = your account's default (e.g. auto, gpt-5, sonnet-4.5)" /></div>
-            <div class="field-note">// Used when Engine = Cursor. Runs Cursor's CLI (<code>agent -p</code>) in read-only ask mode with your Cursor login.<br />
-              // Install once: <code>irm 'https://cursor.com/install?win32=true' | iex</code>, then <code>agent login</code>. See models: <code>agent --list-models</code>.</div>
-          </div>
-
-          <div class="section-title">Custom outputs</div>
-          <div class="export-card">
-            <div id="custom-templates"></div>
-            <div class="field"><label>12 / Name</label><input id="ct-name" placeholder="// template name" /></div>
-            <div class="field"><label>13 / Instructions</label><textarea id="ct-prompt" rows="3" placeholder="// what should the output contain?"></textarea></div>
-            <button id="btn-add-template" class="go-btn ghost">ADD OUTPUT TYPE</button>
-          </div>
-
-          <button id="btn-save-settings" class="go-btn">SAVE SETTINGS</button>
-          <div class="field-note" id="s-data-dir"></div>
-        </div>
-      </section>
-
-      <!-- ───────── 04 BRAIN ───────── -->
+      <!-- ───────── 03 BRAIN ───────── -->
       <section id="v-brain" class="view">
         <div class="brain-top">
           <div class="brain-ask">
@@ -283,7 +182,7 @@
         </div>
       </section>
 
-      <!-- ───────── 05 MONITOR ───────── -->
+      <!-- ───────── 04 MONITOR ───────── -->
       <section id="v-monitor" class="view">
         <div class="dash">
           <div class="metrics">
@@ -314,6 +213,158 @@
             <thead><tr><th style="width:150px">Time</th><th style="width:64px">Level</th><th style="width:96px">Source</th><th>Event</th></tr></thead>
             <tbody id="mon-rows"></tbody>
           </table>
+        </div>
+      </section>
+
+      <!-- ───────── 05 SETTINGS ───────── -->
+      <section id="v-settings" class="view">
+        <div class="settings">
+          <nav class="s-nav" id="s-nav">
+            <a data-to="set-transcription" class="on">Transcription</a>
+            <a data-to="set-writing">Writing</a>
+            <a data-to="set-automation">Automation</a>
+            <a data-to="set-brain">Brain</a>
+            <a data-to="set-outputs">Custom outputs</a>
+            <a data-to="set-phone">Phone</a>
+            <a data-to="set-system">System</a>
+          </nav>
+          <div class="s-body">
+            <section class="s-group" id="set-transcription">
+              <div class="section-title">Transcription</div>
+              <div class="export-card">
+                <div id="model-status" class="sys-grid"></div>
+                <div class="field"><label>T1 / Model file</label><input id="s-model" spellcheck="false" /></div>
+                <div class="field-row">
+                  <div class="field"><label>T2 / Run on</label>
+                    <div class="fmt-row" id="s-backend"><div class="fmt-opt" data-v="vulkan">GPU</div><div class="fmt-opt" data-v="cpu">CPU</div><div class="fmt-opt" data-v="auto">AUTO</div></div>
+                  </div>
+                  <div class="field"><label>T3 / Meeting language</label>
+                    <div class="fmt-row" id="s-language"><div class="fmt-opt" data-v="ar">ARABIC + EN</div><div class="fmt-opt" data-v="en">ENGLISH</div></div>
+                  </div>
+                </div>
+                <div class="field-note">// Any GGUF of the speech model works: put it in the data folder's <code>models</code> and point T1 at it. Q5_K_M is smaller and about as accurate as Q8_0.</div>
+                <div class="card-sub">Speakers</div>
+                <div id="diar-status" class="sys-grid"></div>
+                <div class="field"><label>T4 / Detect speakers</label>
+                  <div class="fmt-row" id="s-speakers"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
+                </div>
+                <div class="field-note">// Up to 4 speakers, on this laptop. Click a speaker label in a transcript to name them; names flow into the minutes.</div>
+                <div class="card-sub">Watch folder</div>
+                <div class="field"><label>T5 / Folder</label>
+                  <div class="input-row"><input id="s-watch" readonly placeholder="// off" /><button id="btn-watch-pick" class="hbtn">CHOOSE</button><button id="btn-watch-clear" class="hbtn">OFF</button></div>
+                </div>
+                <div class="field-note">// New recordings that land here (or in its subfolders) are imported and transcribed automatically. Files already there when you choose it are skipped. Checked every 20 s.</div>
+              </div>
+            </section>
+
+            <section class="s-group" id="set-writing">
+              <div class="section-title">Writing</div>
+              <div class="export-card">
+                <div class="field"><label>W1 / Engine</label>
+                  <div class="fmt-row" id="s-engine"><div class="fmt-opt" data-v="local">LOCAL · PRIVATE</div><div class="fmt-opt" data-v="cursor">CURSOR · CLOUD</div></div>
+                </div>
+                <div class="field-row">
+                  <div class="field"><label>W2 / Output language</label>
+                    <select id="s-outlang"><option value="en">English</option><option value="ar">Arabic</option><option value="auto">Same as meeting</option></select>
+                  </div>
+                  <div class="field"><label>W3 / Default output</label><select id="s-default-template"></select></div>
+                </div>
+                <div class="field"><label>W4 / Names &amp; terms</label><textarea id="s-glossary" rows="4" dir="auto" placeholder="// one per line: a name or term, optionally = how it is written"></textarea></div>
+                <div class="field-note">// W4 is given to the writer and to ASK so names and terms are spelled right.</div>
+                <div class="card-sub">Local writer</div>
+                <div class="field-row">
+                  <div class="field"><label>W5 / Server URL</label><input id="s-local-url" spellcheck="false" /></div>
+                  <div class="field"><label>W6 / Model</label><input id="s-local-model" spellcheck="false" /></div>
+                </div>
+                <div class="field-row">
+                  <div class="field"><label>W7 / Temperature</label><input id="s-local-temp" type="number" min="0" max="1.5" step="0.1" /></div>
+                  <div class="field"><label>W8 / Context (tokens)</label><input id="s-local-ctx" type="number" min="4096" step="4096" /></div>
+                </div>
+                <div class="field-row">
+                  <div class="field"><label>W9 / Time limit (minutes)</label><input id="s-local-timeout" type="number" min="1" max="240" step="1" /></div>
+                  <div class="field"><label>W10 / Start server automatically</label>
+                    <div class="fmt-row" id="s-local-autostart"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
+                  </div>
+                </div>
+                <div class="field-note">// Runs on this laptop; nothing leaves it. Lower temperature keeps minutes closer to the transcript. A bigger context fits longer meetings but needs more memory. With W10 on, Mahdar runs <code>flm serve</code> when nothing answers at W5.</div>
+                <div class="card-sub">Cursor</div>
+                <div class="field"><label>W11 / Cursor model</label><input id="s-cursor-model" spellcheck="false" placeholder="// blank = your account's default" /></div>
+                <div class="field-note">// Sends the transcript to Cursor with your Cursor login (<code>agent -p</code>, read-only ask mode). Install once: <code>irm 'https://cursor.com/install?win32=true' | iex</code>, then <code>agent login</code>.</div>
+              </div>
+            </section>
+
+            <section class="s-group" id="set-automation">
+              <div class="section-title">Automation</div>
+              <div class="export-card">
+                <div class="field-row">
+                  <div class="field"><label>A1 / After transcription, write</label><select id="s-auto-output"></select></div>
+                  <div class="field"><label>A2 / Add to the Brain</label>
+                    <div class="fmt-row" id="s-auto-index"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
+                  </div>
+                </div>
+                <div class="field-note">// Runs by itself when a transcript is ready, including recordings from the watch folder and the phone. Uses the engines chosen in Writing and Brain.</div>
+              </div>
+            </section>
+
+            <section class="s-group" id="set-brain">
+              <div class="section-title">Brain</div>
+              <div class="export-card">
+                <div class="field"><label>B1 / Engine for tags and questions</label>
+                  <div class="fmt-row" id="s-brain-engine"><div class="fmt-opt" data-v="same">SAME AS WRITING</div><div class="fmt-opt" data-v="local">LOCAL</div><div class="fmt-opt" data-v="cursor">CURSOR</div></div>
+                </div>
+                <div class="field-note">// The search model always runs on this laptop; B1 is only for tagging meetings and answering questions across them.</div>
+              </div>
+            </section>
+
+            <section class="s-group" id="set-outputs">
+              <div class="section-title">Custom outputs</div>
+              <div class="export-card">
+                <div id="custom-templates"></div>
+                <div class="field"><label>C1 / Name</label><input id="ct-name" placeholder="// output name" /></div>
+                <div class="field"><label>C2 / Instructions</label><textarea id="ct-prompt" rows="3" placeholder="// what should the output contain?"></textarea></div>
+                <button id="btn-add-template" class="go-btn ghost">ADD OUTPUT TYPE</button>
+              </div>
+            </section>
+
+            <section class="s-group" id="set-phone">
+              <div class="section-title">Phone · Mahdar Remote</div>
+              <div class="export-card">
+                <div class="phone-grid">
+                  <div>
+                    <div class="field"><label>P1 / Phone access</label>
+                      <div class="fmt-row" id="s-remote"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
+                    </div>
+                    <div class="field"><label>P2 / Port</label><input id="s-remote-port" inputmode="numeric" /></div>
+                    <div id="remote-urls" class="sys-grid"></div>
+                    <div class="input-row" style="margin-top:10px">
+                      <button id="btn-remote-https" class="hbtn">SET UP HTTPS (TAILSCALE)</button>
+                      <button id="btn-remote-token" class="hbtn danger" title="Phones paired before will need to scan again">NEW PAIRING CODE</button>
+                    </div>
+                  </div>
+                  <div class="qr-box" id="remote-qr"></div>
+                </div>
+                <div class="field-note">// Scan the QR code with the phone camera: it opens Mahdar on the phone, already paired. Add it to the Home Screen.<br />
+                  // Works on the same Wi‑Fi, or anywhere over Tailscale. Recording in the browser needs the HTTPS address.</div>
+              </div>
+            </section>
+
+            <section class="s-group" id="set-system">
+              <div class="section-title">System</div>
+              <div class="export-card">
+                <div class="field"><label>S1 / Keep Mahdar running</label>
+                  <div class="fmt-row" id="s-watchdog"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
+                </div>
+                <div class="field-note">// A small background helper restarts Mahdar if it crashes or hangs (interrupted transcriptions resume) and starts it when you log in to Windows. Closing Mahdar yourself is respected. Its activity is in // 04 Monitor.</div>
+                <div class="card-sub">Data</div>
+                <div class="input-row"><button id="btn-data-folder" class="hbtn">OPEN DATA FOLDER</button><button id="btn-log-folder-s" class="hbtn">OPEN LOG FOLDER</button></div>
+                <div class="field-note" id="s-data-dir"></div>
+              </div>
+            </section>
+          </div>
+        </div>
+        <div class="s-save">
+          <span class="field-note" id="s-dirty">// changes apply when saved</span>
+          <button id="btn-save-settings" class="go-btn">SAVE SETTINGS</button>
         </div>
       </section>
     </div>
