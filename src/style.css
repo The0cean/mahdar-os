@@ -43,6 +43,9 @@ a { color: var(--accent); cursor: pointer; }
 .controls { display: flex; align-items: center; gap: 8px; margin-left: 20px; }
 .ctrl-btn { background: none; border: 1px solid var(--text4); color: var(--bg); font-family: var(--mono); font-size: 10px; padding: 3px 8px; border-radius: 3px; cursor: pointer; }
 .ctrl-btn:hover { border-color: var(--accent); color: var(--accent); }
+.ctrl-btn.upd-tag { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; letter-spacing: 1px; }
+.ctrl-btn.upd-tag:hover { background: none; color: var(--accent); }
+.upd-notes { margin: 10px 0; padding: 10px 12px; border-left: 2px solid var(--accent); font-size: 12px; max-height: 220px; overflow: auto; }
 
 /* ── Views ── */
 .app { margin-top: 48px; height: calc(100vh - 48px); overflow: hidden; position: relative; }

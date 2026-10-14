@@ -10,6 +10,8 @@ Mahdar is a desktop app that turns Arabic and English meetings into transcripts,
 
 Download `Mahdar_<version>_x64-setup.exe` from the [Releases](https://github.com/The0cean/mahdar-os/releases) page and run it. It installs for the current user and doesn't need admin rights. On first run, click DOWNLOAD to fetch the speech model from Hugging Face.
 
+After that Mahdar updates itself: new versions download in the background from this repo's Releases and install when you click **UPDATE READY · RESTART** or close Mahdar (never while recording, transcribing or writing). Turn it off in Settings › System.
+
 ## Features
 
 - **Speakers**: [NVIDIA Streaming Sortformer 4spk v2.1](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1) (NVIDIA Open Model License) runs first, up to 4 speakers, and transcription chunks follow the speaker turns. Click a label to rename the speaker or reassign the line. The names are used in the minutes.
@@ -38,6 +40,16 @@ npx tauri dev           # run with hot reload
 npx tauri build         # installer in target/release/bundle/nsis/
 cargo run -p mahdar-core --example transcribe -- <native_dir> <model.gguf> <audio> [seconds]
 ```
+
+## Releasing
+
+```bash
+node tools/bump.mjs 0.2.1          # package.json, Cargo.toml, tauri.conf.json, lock files
+git commit -am "v0.2.1" && git tag v0.2.1
+git push && git push origin v0.2.1
+```
+
+The tag runs `.github/workflows/windows-installer.yml`. It builds the installer, signs it with the update key (repository secret `TAURI_SIGNING_PRIVATE_KEY`), and publishes a release with the installer, its `.sig`, and `latest.json`. The release notes are the commit subjects since the previous tag. Installed copies read `releases/latest/download/latest.json` and only install files that verify against the public key in `src-tauri/tauri.conf.json`. Keep the private key safe. Without it, no update can reach installed copies, and replacing it means everyone reinstalls once by hand.
 
 ## Notes
 

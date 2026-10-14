@@ -1123,6 +1123,16 @@ if (location.search.includes("t=")) history.replaceState(null, "", "/"); // the 
 recNote();
 show("list");
 api("/api/settings").then((s) => (settings = s)).catch(() => {});
+// After the laptop installs an update, say so once.
+function checkLaptopVersion() {
+  api("/api/status").then((st) => {
+    let seen = null;
+    try { seen = localStorage.getItem("laptopVersion"); localStorage.setItem("laptopVersion", st.version); } catch {}
+    if (seen && seen !== st.version) toast(`Laptop updated to Mahdar v${st.version}`);
+  }).catch(() => {});
+}
+checkLaptopVersion();
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkLaptopVersion(); });
 api("/api/templates").then((t) => (templates = t)).catch(() => {});
 schedulePoll(3000);
 </script>

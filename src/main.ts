@@ -40,6 +40,11 @@ interface Settings {
   brain_provider: Provider | null;
   default_template: string; auto_output: string; auto_index: boolean;
   local: { temperature: number; context: number; autostart: boolean; timeout_min: number };
+  auto_update: boolean;
+}
+interface UpdateInfo {
+  current: string; state: string; version: string; notes: string; date: string; percent: number;
+  last_check: string; error: string; waiting_for: string;
 }
 interface BrainStatus {
   meetings: number; indexed: number; out_of_date: number; untagged: number; busy: boolean;
@@ -362,6 +367,32 @@ function renderMonitor() {
   $("mon-rows").innerHTML = lines.length
     ? lines.map((l) => `<tr class="lv-${l.level}"><td class="mono">${esc(l.time.slice(0, 19))}</td><td class="lv-${l.level}">${l.level}</td><td class="mono">${esc(l.source)}</td><td class="msg" dir="auto">${esc(l.msg)}</td></tr>`).join("")
     : `<tr class="empty-row"><td colspan="4">// nothing here</td></tr>`;
+}
+
+// ───────── updates ─────────
+let upd: UpdateInfo | null = null;
+function renderUpdate() {
+  const u = upd;
+  if (!u) return;
+  const tag = $<HTMLButtonElement>("upd-tag");
+  tag.hidden = u.state !== "ready";
+  tag.textContent = `UPDATE v${u.version} · RESTART`;
+  const [dot, desc, badge] =
+    u.state === "ready" ? ["orange", `v${u.version} downloaded${u.date ? ` (released ${u.date})` : ""} · ${u.waiting_for ? `installs after ${u.waiting_for} finishes` : "restart to install"}`, "READY"]
+    : u.state === "downloading" ? ["orange", `downloading v${u.version} · ${u.percent}%`, "DOWNLOADING"]
+    : u.state === "checking" ? ["gray", "checking GitHub Releases…", "CHECKING"]
+    : u.state === "error" ? ["red", `check failed: ${u.error}`, "ERROR"]
+    : u.state === "latest" ? ["green", `up to date · checked ${ago(u.last_check)}`, "LATEST"]
+    : ["gray", u.last_check ? `checked ${ago(u.last_check)}` : "not checked yet", "IDLE"];
+  $("upd-status").innerHTML = `<div class="sys-item"><span class="sys-dot ${dot}"></span><div class="sys-info"><div class="sys-name">Mahdar v${esc(u.current)}</div><div class="sys-desc">${esc(desc)}</div></div><span class="sys-badge">${badge}</span></div>`;
+  $<HTMLButtonElement>("btn-upd-install").disabled = u.state !== "ready";
+  $<HTMLButtonElement>("btn-upd-check").disabled = u.state === "checking" || u.state === "downloading";
+  const notes = $("upd-notes");
+  notes.hidden = !(u.notes && (u.state === "ready" || u.state === "downloading"));
+  if (!notes.hidden) notes.innerHTML = `<strong>What's new in v${esc(u.version)}</strong>` + (marked.parse(u.notes) as string);
+}
+async function installUpdate() {
+  try { await invoke("update_install"); } catch (e) { toast(String(e), true); }
 }
 
 // ───────── Claude API key ─────────
@@ -969,6 +1000,9 @@ async function renderSettings() {
   $<HTMLInputElement>("s-local-ctx").value = String(settings.local.context);
   $<HTMLInputElement>("s-local-timeout").value = String(settings.local.timeout_min);
   setFmt("s-local-autostart", settings.local.autostart ? "on" : "off");
+  setFmt("s-auto-update", settings.auto_update ? "on" : "off");
+  upd = await invoke<UpdateInfo>("update_status");
+  renderUpdate();
   renderCustomTemplates();
   $("s-data-dir").textContent = `// data: ${status.data_dir}`;
   markSettingsDirty(false);
@@ -1050,6 +1084,7 @@ async function saveSettings() {
   settings.default_template = $<HTMLSelectElement>("s-default-template").value;
   settings.auto_output = $<HTMLSelectElement>("s-auto-output").value;
   settings.auto_index = getFmt("s-auto-index") === "on";
+  settings.auto_update = getFmt("s-auto-update") !== "off";
   const num = (id: string, def: number, lo: number, hi: number) => {
     const v = Number($<HTMLInputElement>(id).value);
     return Number.isFinite(v) && $<HTMLInputElement>(id).value.trim() !== "" ? Math.min(hi, Math.max(lo, v)) : def;
@@ -1287,6 +1322,13 @@ async function init() {
   $("btn-log-folder-s").onclick = () => invoke("open_log_folder").catch((e) => toast(String(e), true));
   $("btn-data-folder").onclick = () => invoke("open_data_folder").catch((e) => toast(String(e), true));
   initSettingsNav();
+  $("upd-tag").onclick = installUpdate;
+  $("btn-upd-install").onclick = installUpdate;
+  $("btn-upd-check").onclick = async () => {
+    try { upd = await invoke<UpdateInfo>("update_check"); renderUpdate(); if (upd.state === "latest") toast(`Mahdar v${upd.current} is up to date`); } catch (e) { toast(String(e), true); }
+  };
+  $("btn-upd-releases").onclick = () => invoke("update_open_releases").catch((e) => toast(String(e), true));
+  invoke<UpdateInfo>("update_status").then((u) => { upd = u; renderUpdate(); });
   $("btn-add-template").onclick = () => {
     const name = $<HTMLInputElement>("ct-name").value.trim();
     const prompt = $<HTMLTextAreaElement>("ct-prompt").value.trim();
@@ -1300,6 +1342,12 @@ async function init() {
   };
 
   // backend events
+  await listen<UpdateInfo>("update", (ev) => {
+    const was = upd?.state;
+    upd = ev.payload;
+    renderUpdate();
+    if (upd.state === "ready" && was !== "ready") toast(`Mahdar v${upd.version} is ready · RESTART to update`);
+  });
   await listen("brain-updated", async () => {
     await refreshBrainStatus();
     if (!brainStatus?.busy) progress.delete("brain-index");

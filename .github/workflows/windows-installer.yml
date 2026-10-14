@@ -18,8 +18,13 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      # A version tag (pushed, or given to a manual run) publishes a release.
+      RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || inputs.release }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # release notes list the commits since the previous tag
 
       - uses: actions/setup-node@v4
         with:
@@ -39,11 +44,34 @@ jobs:
           tar -xzf native.tar.gz -C native-x
           cp native-x/*/*.dll src-tauri/native/
 
+      - name: Check the version matches the tag
+        if: env.RELEASE_TAG != ''
+        shell: bash
+        run: |
+          app=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          if [ "v$app" != "$RELEASE_TAG" ]; then
+            echo "::error::tag $RELEASE_TAG but the app version is $app. Run: node tools/bump.mjs ${RELEASE_TAG#v}"
+            exit 1
+          fi
+
       - run: cargo test -p mahdar-core -p mahdar-brain
 
       - run: npm ci
 
-      - run: npx tauri build
+      - name: Build
+        if: env.RELEASE_TAG == ''
+        run: npx tauri build
+
+      # Releases are signed with the update key, so installed copies accept them as updates.
+      - name: Build (signed for auto-update)
+        if: env.RELEASE_TAG != ''
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then echo "::error::the TAURI_SIGNING_PRIVATE_KEY secret is missing"; exit 1; fi
+          npx tauri build --config '{"bundle":{"createUpdaterArtifacts":true}}'
 
       - uses: actions/upload-artifact@v4
         with:
@@ -51,12 +79,37 @@ jobs:
           path: target/release/bundle/nsis/*.exe
           if-no-files-found: error
 
-      # A version tag (e.g. v0.1.0), pushed or given to a manual run, publishes the
-      # installer as a GitHub Release; a manual run creates the tag on this commit.
+      # latest.json is what installed copies check (releases/latest/download/latest.json).
+      - name: Release notes and latest.json
+        if: env.RELEASE_TAG != ''
+        shell: bash
+        run: |
+          prev=$(git describe --tags --abbrev=0 --match 'v*' HEAD^ 2>/dev/null || true)
+          { echo "## What's new"; echo; git log --no-merges --pretty='- %s' ${prev:+$prev..}HEAD; } > notes.md
+          cd target/release/bundle/nsis
+          exe=$(ls *-setup.exe | head -1)
+          RELEASE_EXE="$exe" node -e '
+            const fs = require("fs");
+            const tag = process.env.RELEASE_TAG, exe = process.env.RELEASE_EXE;
+            fs.writeFileSync("latest.json", JSON.stringify({
+              version: tag.replace(/^v/, ""),
+              notes: fs.readFileSync("../../../../notes.md", "utf8"),
+              pub_date: new Date().toISOString(),
+              platforms: { "windows-x86_64": {
+                signature: fs.readFileSync(exe + ".sig", "utf8").trim(),
+                url: `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${tag}/${exe.replace(/ /g, ".")}`,
+              } },
+            }, null, 2));'
+          cat latest.json
+
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release != '')
+        if: env.RELEASE_TAG != ''
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release || github.ref_name }}
+          tag_name: ${{ env.RELEASE_TAG }}
           target_commitish: ${{ github.sha }}
-          files: target/release/bundle/nsis/*.exe
+          body_path: notes.md
+          files: |
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/nsis/*-setup.exe.sig
+            target/release/bundle/nsis/latest.json

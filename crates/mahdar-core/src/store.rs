@@ -164,6 +164,9 @@ pub struct Settings {
     pub auto_index: bool,
     #[serde(default)]
     pub local: LocalOptions,
+    /// Download new versions in the background and offer to install them.
+    #[serde(default = "yes")]
+    pub auto_update: bool,
 }
 
 impl Settings {
@@ -207,6 +210,7 @@ impl Settings {
             auto_output: String::new(),
             auto_index: false,
             local: LocalOptions::default(),
+            auto_update: true,
         }
     }
 }

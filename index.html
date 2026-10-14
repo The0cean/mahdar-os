@@ -16,6 +16,7 @@
         <span class="step" data-view="settings">// 05 Settings</span>
       </nav>
       <div class="controls">
+        <button id="upd-tag" class="ctrl-btn upd-tag" hidden title="A new version of Mahdar is downloaded">UPDATE READY · RESTART</button>
         <button id="btn-theme" class="ctrl-btn">DARK</button>
         <button id="zoom-in" class="ctrl-btn" title="Larger text">+</button>
         <button id="zoom-out" class="ctrl-btn" title="Smaller text">-</button>
@@ -383,6 +384,14 @@
                   <div class="fmt-row" id="s-watchdog"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
                 </div>
                 <div class="field-note">// A small background helper restarts Mahdar if it crashes or hangs (interrupted transcriptions resume) and starts it when you log in to Windows. Closing Mahdar yourself is respected. Its activity is in // 04 Monitor.</div>
+                <div class="card-sub">Updates</div>
+                <div id="upd-status" class="sys-grid"></div>
+                <div class="field"><label>S2 / Update automatically</label>
+                  <div class="fmt-row" id="s-auto-update"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
+                </div>
+                <div class="input-row"><button id="btn-upd-check" class="hbtn">CHECK NOW</button><button id="btn-upd-install" class="hbtn accent" disabled>RESTART TO UPDATE</button><button id="btn-upd-releases" class="hbtn">ALL RELEASES</button></div>
+                <div id="upd-notes" class="md upd-notes" hidden></div>
+                <div class="field-note">// New versions download in the background from GitHub Releases (checked at start and every 6 hours) and install when you restart or close Mahdar, never while recording, transcribing or writing. Your meetings and settings are kept. Only installers signed with Mahdar's update key are accepted.</div>
                 <div class="card-sub">Data</div>
                 <div class="input-row"><button id="btn-data-folder" class="hbtn">OPEN DATA FOLDER</button><button id="btn-log-folder-s" class="hbtn">OPEN LOG FOLDER</button></div>
                 <div class="field-note" id="s-data-dir"></div>

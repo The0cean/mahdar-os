@@ -2,6 +2,7 @@ mod brain;
 mod remote;
 mod watch;
 pub mod watchdog;
+mod update;
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -34,6 +35,8 @@ pub(crate) struct AppState {
     started: chrono::DateTime<Local>,
     /// Mahdar Brain: index, embedder, indexing flag.
     pub(crate) brain: brain::BrainState,
+    /// Auto-update: status and the downloaded update.
+    pub(crate) update: update::UpdateState,
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -991,6 +994,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             log::init(&data_dir);
@@ -1032,6 +1036,7 @@ pub fn run() {
                 progress: Mutex::new(Default::default()),
                 remote_state: Mutex::new("starting".into()),
                 brain: Default::default(),
+                update: Default::default(),
                 started: Local::now(),
             });
             for id in resume {
@@ -1053,6 +1058,7 @@ pub fn run() {
                 }
             });
             restart_remote(app.handle());
+            update::spawn(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1098,6 +1104,10 @@ pub fn run() {
             brain::brain_asks,
             open_log_folder,
             open_data_folder,
+            update::update_status,
+            update::update_check,
+            update::update_install,
+            update::update_open_releases,
         ])
         .build(tauri::generate_context!())
         .expect("error while building Mahdar")
@@ -1110,6 +1120,7 @@ pub fn run() {
                 // A normal close: the watchdog must not restart Mahdar.
                 watchdog::remove_app_file(state.store.root());
                 log::info("app", "Mahdar closed");
+                update::install_on_exit(app);
             }
         });
 }

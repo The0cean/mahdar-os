@@ -29,6 +29,13 @@ pub struct BrainState {
     busy: AtomicBool,
 }
 
+impl BrainState {
+    /// Indexing is running.
+    pub(crate) fn is_busy(&self) -> bool {
+        self.busy.load(Ordering::SeqCst)
+    }
+}
+
 fn models_root(app: &AppHandle) -> PathBuf {
     app.state::<AppState>().store.root().join("models")
 }
