@@ -28,6 +28,8 @@ interface Meeting {
 interface MeetingSummary { id: string; title: string; created: string; duration_s: number; status: Status; n_outputs: number }
 interface Template { id: string; name: string; prompt: string; builtin: boolean }
 type Provider =
+  | { kind: "claude_cli"; model: string }
+  | { kind: "claude_api"; model: string; effort: string }
   | { kind: "cursor_cli"; model: string }
   | { kind: "local"; base_url: string; model: string };
 interface Settings {
@@ -38,6 +40,11 @@ interface Settings {
   brain_provider: Provider | null;
   default_template: string; auto_output: string; auto_index: boolean;
   local: { temperature: number; context: number; autostart: boolean; timeout_min: number };
+  auto_update: boolean;
+}
+interface UpdateInfo {
+  current: string; state: string; version: string; notes: string; date: string; percent: number;
+  last_check: string; error: string; waiting_for: string;
 }
 interface BrainStatus {
   meetings: number; indexed: number; out_of_date: number; untagged: number; busy: boolean;
@@ -54,6 +61,7 @@ interface Monitor {
   version: string; pid: number; started: string; uptime_s: number; speech: string; speakers: string;
   writer: string; local_server: boolean; remote: string;
   jobs: { id: string; title: string; stage: string; done: number; total: number }[];
+  api_key: string; spend_today: number; spend_month: number; spend_total: number;
   watchdog: { enabled: boolean; running: boolean; state: string; last_check: string; restarts_24h: number; last_restart: string | null };
   log: LogLine[];
 }
@@ -75,10 +83,16 @@ function speechModelName() {
   const quant = file.match(/-((?:Q\d\w*)|F16|BF16|F32)\.gguf$/i)?.[1];
   return file.toLowerCase().startsWith("cohere-transcribe-arabic") ? `Cohere Transcribe Arabic${quant ? ` · ${quant}` : ""}` : file || "speech model";
 }
-const providerValue = (p: Provider) => (p.kind === "local" ? "local" : "cursor");
+const API_NAMES: Record<string, string> = { "claude-haiku-5-5": "Haiku 5.5", "claude-sonnet-5-5": "Sonnet 5.5", "claude-opus-5-5": "Opus 5.5" };
+const providerValue = (p: Provider) =>
+  p.kind === "local" ? "local" : p.kind === "cursor_cli" ? "cursor" : p.kind === "claude_api" ? `api:${p.model}` : `claude:${p.model}`;
+/** The Settings engine choice for a writer: local | api | cursor | claude. */
+const engineKind = (p: Provider) => (p.kind === "local" ? "local" : p.kind === "claude_api" ? "api" : p.kind === "cursor_cli" ? "cursor" : "claude");
 function providerName(p: Provider = settings.provider) {
   if (p.kind === "local") return `${p.model} (local)`;
-  return `Cursor${p.model ? ` ${p.model}` : ""} (cloud)`;
+  if (p.kind === "claude_api") return `Claude ${API_NAMES[p.model] ?? p.model}${p.effort ? ` · ${p.effort}` : ""} (API)`;
+  if (p.kind === "cursor_cli") return `Cursor${p.model ? ` ${p.model}` : ""} (cloud)`;
+  return `Claude ${p.model} (cloud)`;
 }
 
 // ───────── helpers ─────────
@@ -155,13 +169,14 @@ async function refreshBrainStatus() {
 }
 function brainEngineValue() {
   const p = settings.brain_provider;
-  return !p ? "same" : p.kind === "local" ? "local" : "cursor";
+  return !p ? "same" : p.kind === "local" ? "local" : p.kind === "claude_api" ? `api:${p.model}` : p.kind === "cursor_cli" ? "cursor" : "same";
 }
 async function saveBrainEngine() {
   const v = $<HTMLSelectElement>("b-engine").value;
   const local = settings.provider.kind === "local" ? settings.provider : { kind: "local" as const, base_url: LOCAL_URL, model: LOCAL_MODEL };
+  const effort = settings.provider.kind === "claude_api" ? settings.provider.effort : "high";
   const cursor = { kind: "cursor_cli" as const, model: settings.provider.kind === "cursor_cli" ? settings.provider.model : (store.get("cursorModel") ?? cursorModel) };
-  settings.brain_provider = v === "same" ? null : v === "local" ? local : cursor;
+  settings.brain_provider = v === "same" ? null : v === "local" ? local : v === "cursor" ? cursor : { kind: "claude_api", model: v.slice(4), effort };
   try { await invoke("save_settings", { settings }); toast(`Brain engine: ${settings.brain_provider ? providerName(settings.brain_provider) : "same as minutes"}`); } catch (e) { toast(String(e), true); }
 }
 function renderBrainStatus() {
@@ -305,6 +320,7 @@ async function openAt(id: string, t: number) {
 // ───────── monitor ─────────
 let monTimer = 0;
 let monData: Monitor | null = null;
+const money = (x: number) => "$" + (x >= 100 ? x.toFixed(0) : x.toFixed(2));
 const dur = (s: number) => (s < 3600 ? `${Math.max(1, Math.round(s / 60))} min` : s < 86400 ? `${(s / 3600).toFixed(1)} h` : `${(s / 86400).toFixed(1)} d`);
 const ago = (iso: string) => {
   if (!iso) return "never";
@@ -323,12 +339,14 @@ function renderMonitor() {
   $("mon-jobs-n").textContent = String(d.jobs.length);
   $("mon-writer").textContent = d.writer.includes("(local)") ? "LOCAL" : "CLOUD";
   $("mon-errors").textContent = String(d.log.filter((l) => l.level === "ERROR").length);
+  const spend = d.spend_total > 0 ? ` · spent ${money(d.spend_today)} today, ${money(d.spend_month)} this month, ${money(d.spend_total)} total` : "";
   const w = d.watchdog;
   const items: [string, string, string, string][] = [
     ["green", "Mahdar", `v${d.version} · pid ${d.pid} · started ${dateStr(d.started)}`, "RUNNING"],
     [d.speech === "busy" ? "orange" : "green", "Speech model", d.speech, d.speech === "busy" ? "BUSY" : d.speech.startsWith("loaded") ? "LOADED" : "IDLE"],
     ["green", "Speakers", d.speakers, d.speakers.toUpperCase().split(" ")[0]],
     [d.writer.includes("(local)") ? "green" : "orange", "Minutes writer", d.writer + (d.local_server ? " · local server running" : ""), d.writer.includes("(local)") ? "LOCAL" : "CLOUD"],
+    [d.api_key === "none" ? "gray" : "green", "Claude API key", d.api_key === "none" ? "none · Settings → Writing" : d.api_key + spend, d.api_key === "none" ? "NONE" : "SAVED"],
     [d.remote === "off" ? "gray" : d.remote.startsWith("listening") ? "green" : "red", "Phone server", d.remote, d.remote === "off" ? "OFF" : d.remote.startsWith("listening") ? "ON" : "ERROR"],
     [!w.enabled ? "gray" : w.running ? "green" : "red", "Watchdog",
       !w.enabled ? "off · Settings → Watchdog" : `${w.running ? w.state : "not running"} · checked ${ago(w.last_check)}${w.restarts_24h ? ` · ${w.restarts_24h} restart(s) in 24 h` : ""}`,
@@ -349,6 +367,41 @@ function renderMonitor() {
   $("mon-rows").innerHTML = lines.length
     ? lines.map((l) => `<tr class="lv-${l.level}"><td class="mono">${esc(l.time.slice(0, 19))}</td><td class="lv-${l.level}">${l.level}</td><td class="mono">${esc(l.source)}</td><td class="msg" dir="auto">${esc(l.msg)}</td></tr>`).join("")
     : `<tr class="empty-row"><td colspan="4">// nothing here</td></tr>`;
+}
+
+// ───────── updates ─────────
+let upd: UpdateInfo | null = null;
+function renderUpdate() {
+  const u = upd;
+  if (!u) return;
+  const tag = $<HTMLButtonElement>("upd-tag");
+  tag.hidden = u.state !== "ready";
+  tag.textContent = `UPDATE v${u.version} · RESTART`;
+  const [dot, desc, badge] =
+    u.state === "ready" ? ["orange", `v${u.version} downloaded${u.date ? ` (released ${u.date})` : ""} · ${u.waiting_for ? `installs after ${u.waiting_for} finishes` : "restart to install"}`, "READY"]
+    : u.state === "downloading" ? ["orange", `downloading v${u.version} · ${u.percent}%`, "DOWNLOADING"]
+    : u.state === "checking" ? ["gray", "checking GitHub Releases…", "CHECKING"]
+    : u.state === "error" ? ["red", `check failed: ${u.error}`, "ERROR"]
+    : u.state === "latest" ? ["green", `up to date · checked ${ago(u.last_check)}`, "LATEST"]
+    : ["gray", u.last_check ? `checked ${ago(u.last_check)}` : "not checked yet", "IDLE"];
+  $("upd-status").innerHTML = `<div class="sys-item"><span class="sys-dot ${dot}"></span><div class="sys-info"><div class="sys-name">Mahdar v${esc(u.current)}</div><div class="sys-desc">${esc(desc)}</div></div><span class="sys-badge">${badge}</span></div>`;
+  $<HTMLButtonElement>("btn-upd-install").disabled = u.state !== "ready";
+  $<HTMLButtonElement>("btn-upd-check").disabled = u.state === "checking" || u.state === "downloading";
+  const notes = $("upd-notes");
+  notes.hidden = !(u.notes && (u.state === "ready" || u.state === "downloading"));
+  if (!notes.hidden) notes.innerHTML = `<strong>What's new in v${esc(u.version)}</strong>` + (marked.parse(u.notes) as string);
+}
+async function installUpdate() {
+  try { await invoke("update_install"); } catch (e) { toast(String(e), true); }
+}
+
+// ───────── Claude API key ─────────
+async function renderApiKey() {
+  const k = await invoke<{ masked: string; source: string }>("api_key_status");
+  $("api-status").innerHTML = `<div class="sys-item"><span class="sys-dot ${k.masked ? "green" : "gray"}"></span><div class="sys-info"><div class="sys-name">${k.masked ? esc(k.masked) : "No key saved"}</div><div class="sys-desc">${
+    k.masked ? (k.source === "Mahdar" ? "saved in Mahdar" : `shared from ${esc(k.source)}`) : "paste a key below"}</div></div><span class="sys-badge">${k.masked ? "SAVED" : "NONE"}</span></div>`;
+  $<HTMLButtonElement>("btn-api-test").disabled = !k.masked;
+  $<HTMLButtonElement>("btn-api-del").disabled = k.source !== "Mahdar";
 }
 
 function applyTheme(theme: string) {
@@ -384,7 +437,8 @@ function renderLibrary() {
     [settings.watch_folder ? "green" : "gray", "Watch folder", settings.watch_folder || "off · Settings", settings.watch_folder ? "WATCHING" : "OFF"],
     [status.ffmpeg ? "green" : "orange", "ffmpeg", status.ffmpeg ? "audio import available" : "missing · winget install Gyan.FFmpeg", status.ffmpeg ? "OK" : "MISSING"],
     [p.kind === "local" ? "green" : "orange", "Minutes writer",
-      p.kind === "local" ? `${p.model} · local, private` : `${providerName(p)} · via agent -p`,
+      p.kind === "local" ? `${p.model} · local, private` : p.kind === "cursor_cli" ? `${providerName(p)} · via agent -p`
+        : p.kind === "claude_api" ? `${providerName(p)} · cloud, your API credits` : `Claude ${p.model} · cloud via claude -p`,
       p.kind === "local" ? "LOCAL" : "CLOUD"],
   ];
   $("sys").innerHTML = sys
@@ -589,7 +643,11 @@ function renderControls() {
   note.className = `field-note${p.kind === "local" ? "" : " warn"}`;
   note.innerHTML = p.kind === "local"
     ? `// private: runs on ${esc(p.model)} at ${esc(p.base_url)}`
-    : "// cloud: the transcript is sent to Cursor via your Cursor login";
+    : p.kind === "cursor_cli"
+      ? "// cloud: the transcript is sent to Cursor via your Cursor login"
+      : p.kind === "claude_api"
+        ? "// cloud: the transcript is sent to Anthropic with your API key (billed to your credits; see // 04 Monitor)"
+        : "// cloud: the transcript is sent to Anthropic via your Claude Code login";
 }
 
 function renderTimeline() {
@@ -695,7 +753,11 @@ async function saveProviderFromPanel() {
   cursorModel = settings.provider.kind === "cursor_cli" ? settings.provider.model : (store.get("cursorModel") ?? cursorModel);
   settings.provider = v === "local"
     ? { kind: "local", base_url: prevLocal?.base_url ?? LOCAL_URL, model: prevLocal?.model ?? LOCAL_MODEL }
-    : { kind: "cursor_cli", model: cursorModel };
+    : v === "cursor"
+      ? { kind: "cursor_cli", model: cursorModel }
+      : v.startsWith("api:")
+        ? { kind: "claude_api", model: v.slice(4), effort: settings.provider.kind === "claude_api" ? settings.provider.effort : (store.get("apiEffort") ?? "") }
+        : { kind: "claude_cli", model: v.split(":")[1] };
   settings.output_language = $<HTMLSelectElement>("o-lang").value;
   await invoke("save_settings", { settings });
   renderControls();
@@ -904,6 +966,8 @@ async function renderSettings() {
   setFmt("s-speakers", settings.speakers ? "on" : "off");
   setFmt("s-remote", settings.remote_enabled ? "on" : "off");
   setFmt("s-watchdog", settings.watchdog ? "on" : "off");
+  setFmt("s-effort", settings.provider.kind === "claude_api" ? settings.provider.effort : (store.get("apiEffort") ?? ""));
+  await renderApiKey();
   $<HTMLInputElement>("s-remote-port").value = String(settings.remote_port || 8787);
   await renderRemote();
   $<HTMLInputElement>("s-watch").value = settings.watch_folder ?? "";
@@ -920,7 +984,9 @@ async function renderSettings() {
     $<HTMLInputElement>("s-local-url").value = store.get("localUrl") ?? LOCAL_URL;
     $<HTMLInputElement>("s-local-model").value = store.get("localModel") ?? LOCAL_MODEL;
   }
-  setFmt("s-engine", providerValue(p));
+  setFmt("s-engine", engineKind(p));
+  setFmt("s-api-model", p.kind === "claude_api" ? p.model : (store.get("apiModel") ?? "claude-sonnet-5-5"));
+  setFmt("s-claude-model", p.kind === "claude_cli" ? p.model : (store.get("claudeModel") ?? "haiku"));
   $<HTMLSelectElement>("s-outlang").value = settings.output_language;
   const opts = templates.map((t) => `<option value="${t.id}">${esc(t.name)}${t.builtin ? "" : " · custom"}</option>`).join("");
   $("s-default-template").innerHTML = opts;
@@ -928,11 +994,15 @@ async function renderSettings() {
   $("s-auto-output").innerHTML = `<option value="">Nothing</option>${opts}`;
   $<HTMLSelectElement>("s-auto-output").value = templates.some((t) => t.id === settings.auto_output) ? settings.auto_output : "";
   setFmt("s-auto-index", settings.auto_index ? "on" : "off");
-  setFmt("s-brain-engine", brainEngineValue());
+  const bp = settings.brain_provider;
+  setFmt("s-brain-engine", bp ? engineKind(bp) : "same");
   $<HTMLInputElement>("s-local-temp").value = String(settings.local.temperature);
   $<HTMLInputElement>("s-local-ctx").value = String(settings.local.context);
   $<HTMLInputElement>("s-local-timeout").value = String(settings.local.timeout_min);
   setFmt("s-local-autostart", settings.local.autostart ? "on" : "off");
+  setFmt("s-auto-update", settings.auto_update ? "on" : "off");
+  upd = await invoke<UpdateInfo>("update_status");
+  renderUpdate();
   renderCustomTemplates();
   $("s-data-dir").textContent = `// data: ${status.data_dir}`;
   markSettingsDirty(false);
@@ -996,14 +1066,25 @@ async function saveSettings() {
   cursorModel = $<HTMLInputElement>("s-cursor-model").value.trim();
   store.set("cursorModel", cursorModel);
   const local = { kind: "local" as const, base_url: localUrl, model: localModel };
-  const cursor = { kind: "cursor_cli" as const, model: cursorModel };
-  settings.provider = getFmt("s-engine") === "cursor" ? cursor : local;
-  const be = getFmt("s-brain-engine");
-  settings.brain_provider = be === "local" ? local : be === "cursor" ? cursor : null;
+  const effort = getFmt("s-effort");
+  const apiModel = getFmt("s-api-model") || "claude-sonnet-5-5";
+  const claudeModel = getFmt("s-claude-model") || "haiku";
+  store.set("apiEffort", effort);
+  store.set("apiModel", apiModel);
+  store.set("claudeModel", claudeModel);
+  const engines: Record<string, Provider> = {
+    local,
+    cursor: { kind: "cursor_cli", model: cursorModel },
+    api: { kind: "claude_api", model: apiModel, effort },
+    claude: { kind: "claude_cli", model: claudeModel },
+  };
+  settings.provider = engines[getFmt("s-engine")] ?? local;
+  settings.brain_provider = engines[getFmt("s-brain-engine")] ?? null;
   settings.output_language = $<HTMLSelectElement>("s-outlang").value;
   settings.default_template = $<HTMLSelectElement>("s-default-template").value;
   settings.auto_output = $<HTMLSelectElement>("s-auto-output").value;
   settings.auto_index = getFmt("s-auto-index") === "on";
+  settings.auto_update = getFmt("s-auto-update") !== "off";
   const num = (id: string, def: number, lo: number, hi: number) => {
     const v = Number($<HTMLInputElement>(id).value);
     return Number.isFinite(v) && $<HTMLInputElement>(id).value.trim() !== "" ? Math.min(hi, Math.max(lo, v)) : def;
@@ -1207,6 +1288,27 @@ async function init() {
     row.querySelectorAll<HTMLElement>(".fmt-opt").forEach((o) => (o.onclick = () => setFmt(row.id, o.dataset.v!))));
   $("btn-save-settings").onclick = saveSettings;
   $("b-engine").onchange = saveBrainEngine;
+  $("btn-api-save").onclick = async () => {
+    const input = $<HTMLInputElement>("s-api-key");
+    const btn = $<HTMLButtonElement>("btn-api-save");
+    if (!input.value.trim()) return toast("Paste a key first", true);
+    btn.disabled = true;
+    btn.textContent = "CHECKING…";
+    try {
+      toast(`Saved · ${await invoke<string>("api_key_save", { key: input.value })}`);
+      input.value = "";
+      await renderApiKey();
+    } catch (e) { toast(String(e), true); }
+    btn.disabled = false;
+    btn.textContent = "SAVE KEY";
+  };
+  $("btn-api-test").onclick = async () => {
+    try { toast(await invoke<string>("api_key_test")); } catch (e) { toast(String(e), true); }
+  };
+  $("btn-api-del").onclick = async () => {
+    if (!(await askDialog("Remove the Claude API key from Mahdar?", { kind: "warning" }))) return;
+    try { await invoke("api_key_delete"); await renderApiKey(); toast("Key removed"); } catch (e) { toast(String(e), true); }
+  };
   $("mon-filter").addEventListener("click", () => setTimeout(renderMonitor));
   $("b-ask").onclick = brainAsk;
   $<HTMLInputElement>("b-q").onkeydown = (e) => { if (e.key === "Enter") brainAsk(); };
@@ -1220,6 +1322,13 @@ async function init() {
   $("btn-log-folder-s").onclick = () => invoke("open_log_folder").catch((e) => toast(String(e), true));
   $("btn-data-folder").onclick = () => invoke("open_data_folder").catch((e) => toast(String(e), true));
   initSettingsNav();
+  $("upd-tag").onclick = installUpdate;
+  $("btn-upd-install").onclick = installUpdate;
+  $("btn-upd-check").onclick = async () => {
+    try { upd = await invoke<UpdateInfo>("update_check"); renderUpdate(); if (upd.state === "latest") toast(`Mahdar v${upd.current} is up to date`); } catch (e) { toast(String(e), true); }
+  };
+  $("btn-upd-releases").onclick = () => invoke("update_open_releases").catch((e) => toast(String(e), true));
+  invoke<UpdateInfo>("update_status").then((u) => { upd = u; renderUpdate(); });
   $("btn-add-template").onclick = () => {
     const name = $<HTMLInputElement>("ct-name").value.trim();
     const prompt = $<HTMLTextAreaElement>("ct-prompt").value.trim();
@@ -1233,6 +1342,12 @@ async function init() {
   };
 
   // backend events
+  await listen<UpdateInfo>("update", (ev) => {
+    const was = upd?.state;
+    upd = ev.payload;
+    renderUpdate();
+    if (upd.state === "ready" && was !== "ready") toast(`Mahdar v${upd.version} is ready · RESTART to update`);
+  });
   await listen("brain-updated", async () => {
     await refreshBrainStatus();
     if (!brainStatus?.busy) progress.delete("brain-index");

@@ -81,6 +81,21 @@ pub fn remove_app_file(data: &Path) {
     let _ = std::fs::remove_file(app_file(data));
 }
 
+/// Before an update installs: mark this close as normal and stop the watchdog, which runs
+/// from the same mahdar.exe the installer replaces. The new version starts it again.
+pub fn stop_for_update(data: &Path) {
+    remove_app_file(data);
+    let f: WatchdogFile = read(&watchdog_file(data)).unwrap_or_default();
+    if f.pid != 0 && f.pid != std::process::id() && is_running(f.pid, &f.exe) {
+        if proc::kill(f.pid) {
+            log::info("watchdog", "stopped for the update");
+        } else {
+            log::warn("watchdog", "could not stop the watchdog before the update");
+        }
+    }
+    let _ = std::fs::remove_file(watchdog_file(data));
+}
+
 // ---------- processes (Windows) ----------
 
 #[cfg(windows)]
