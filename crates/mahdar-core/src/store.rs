@@ -211,6 +211,23 @@ impl Settings {
     }
 }
 
+/// Claude API spend in USD, as priced by Mahdar from each response's token counts.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Spend {
+    pub total: f64,
+    pub days: BTreeMap<String, f64>,
+}
+
+impl Spend {
+    pub fn today(&self) -> f64 {
+        self.days.get(&chrono::Local::now().format("%Y-%m-%d").to_string()).copied().unwrap_or(0.0)
+    }
+    pub fn this_month(&self) -> f64 {
+        let month = chrono::Local::now().format("%Y-%m").to_string();
+        self.days.iter().filter(|(d, _)| d.starts_with(&month)).map(|(_, v)| v).sum()
+    }
+}
+
 pub struct Store {
     root: PathBuf,
 }
@@ -297,6 +314,20 @@ impl Store {
     pub fn save_seen(&self, seen: &std::collections::HashSet<String>) -> Result<()> {
         fs::write(self.root.join("watched.json"), serde_json::to_vec(seen)?)?;
         Ok(())
+    }
+
+    /// Add a Claude API charge to `usage.json` (per day and total).
+    pub fn add_spend(&self, usd: f64) -> Result<()> {
+        let mut s = self.spend();
+        let day = chrono::Local::now().format("%Y-%m-%d").to_string();
+        *s.days.entry(day).or_default() += usd;
+        s.total += usd;
+        fs::write(self.root.join("usage.json"), serde_json::to_vec_pretty(&s)?)?;
+        Ok(())
+    }
+
+    pub fn spend(&self) -> Spend {
+        fs::read(self.root.join("usage.json")).ok().and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or_default()
     }
 
     pub fn save_settings(&self, s: &Settings) -> Result<()> {

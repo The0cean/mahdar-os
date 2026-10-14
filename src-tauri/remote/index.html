@@ -176,6 +176,9 @@ textarea { resize: none; line-height: 1.6; }
 .mon-row .v { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12px; color: var(--text2); overflow-wrap: anywhere; }
 .mon-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text5); flex-shrink: 0; align-self: center; }
 .mon-dot.ok { background: var(--green); } .mon-dot.warn { background: var(--orange); } .mon-dot.err { background: var(--red); } .mon-dot.busy { background: var(--accent); }
+.spend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: var(--border); border: 1px solid var(--border); margin-top: 8px; }
+.spend div { background: var(--bg); padding: 12px 10px; }
+.spend b { display: block; font-family: var(--mono); font-size: 20px; font-weight: 700; letter-spacing: -0.5px; margin-top: 4px; font-variant-numeric: tabular-nums; }
 .mon-log { font-family: var(--mono); font-size: 11px; line-height: 1.55; }
 .mon-log .ev { padding: 7px 16px; border-bottom: 1px solid var(--border); }
 .mon-log .ev .h { display: flex; gap: 8px; color: var(--text4); font-size: 10px; margin-bottom: 2px; }
@@ -257,7 +260,7 @@ textarea { resize: none; line-height: 1.6; }
     <div class="b-ask"><textarea id="b-q" rows="2" dir="auto" placeholder="// ask across all your meetings"></textarea><button class="btn" id="b-ask">ASK</button></div>
     <button class="b-scope hidden" id="b-scope"></button>
     <div class="b-status"><div class="note" id="b-status">// …</div><button class="chip on" id="b-index">INDEX ALL</button></div>
-    <select id="b-engine" class="b-engine" title="Engine for the Brain (tagging and questions)"><option value="same">Engine: same as minutes</option><option value="local">Engine: Local · private</option><option value="cursor">Engine: Cursor · cloud</option></select>
+    <select id="b-engine" class="b-engine" title="Engine for the Brain (tagging and questions)"><option value="same">Engine: same as minutes</option><option value="local">Engine: Local · private</option><option value="api:claude-haiku-5-5">Engine: Haiku 5.5 · API</option><option value="api:claude-sonnet-5-5">Engine: Sonnet 5.5 · API</option><option value="api:claude-opus-5-5">Engine: Opus 5.5 · API</option></select>
   </div>
   <div id="b-body"></div>
 </main>
@@ -266,6 +269,9 @@ textarea { resize: none; line-height: 1.6; }
   <div class="section">
     <div class="label">Laptop</div>
     <div id="mon-status"></div>
+    <div class="label" style="margin-top:18px">Claude API spend</div>
+    <div class="spend"><div><span class="label">Today</span><b id="sp-today">$0.00</b></div><div><span class="label">Month</span><b id="sp-month">$0.00</b></div><div><span class="label">Total</span><b id="sp-total">$0.00</b></div></div>
+    <div class="note">// priced by Mahdar from token counts; your real balance is on platform.claude.com</div>
   </div>
   <div class="section" style="padding-bottom:8px">
     <div class="label" style="margin-bottom:8px">Activity log</div>
@@ -277,7 +283,7 @@ textarea { resize: none; line-height: 1.6; }
 <main id="v-settings" class="hidden">
   <div class="section">
     <div class="field"><div class="label">Minutes written by</div>
-      <select id="st-provider"><option value="local">Local model · private</option><option value="cursor">Cursor · cloud</option></select>
+      <select id="st-provider"><optgroup label="Claude API · your credits"><option value="api:claude-haiku-5-5">Claude Haiku 5.5 · API</option><option value="api:claude-sonnet-5-5">Claude Sonnet 5.5 · API</option><option value="api:claude-opus-5-5">Claude Opus 5.5 · API</option></optgroup><optgroup label="Other"><option value="claude:haiku">Haiku · Claude Code</option><option value="claude:sonnet">Sonnet · Claude Code</option><option value="cursor">Cursor · cloud</option><option value="local">Local model · private</option></optgroup></select>
     </div>
     <div class="field"><div class="label">Minutes language</div>
       <div class="seg-ctl" id="st-outlang"><button data-v="en">ENGLISH</button><button data-v="ar">ARABIC</button><button data-v="auto">SAME</button></div>
@@ -555,7 +561,7 @@ function renderMinutes() {
   let html = `<div class="section">
     <div class="field"><div class="label">Write</div><select id="tpl">${templates.map((t) => `<option value="${t.id}">${esc(t.name)}</option>`).join("")}</select></div>
     <div class="grid2 field">
-      <select id="m-provider" aria-label="Engine"><option value="local">Local · private</option><option value="cursor">Cursor · cloud</option></select>
+      <select id="m-provider" aria-label="Engine"><option value="api:claude-haiku-5-5">Haiku 5.5 · API</option><option value="api:claude-sonnet-5-5">Sonnet 5.5 · API</option><option value="api:claude-opus-5-5">Opus 5.5 · API</option><option value="claude:haiku">Haiku · Claude Code</option><option value="claude:sonnet">Sonnet · Claude Code</option><option value="cursor">Cursor · cloud</option><option value="local">Local · private</option></select>
       <select id="m-lang" aria-label="Language"><option value="en">English</option><option value="ar">Arabic</option><option value="auto">Same as meeting</option></select>
     </div>
     <button class="btn" id="gen">${generating === m.id ? "WRITING… KEEP THIS OPEN" : "GENERATE"}</button>
@@ -896,12 +902,15 @@ function upload(blob, name) {
 }
 
 // ───── settings ─────
-const providerValue = (p) => (p.kind === "local" ? "local" : "cursor");
+const providerValue = (p) => (p.kind === "local" ? "local" : p.kind === "cursor_cli" ? "cursor" : p.kind === "claude_api" ? `api:${p.model}` : `claude:${p.model}`);
+const API_NAMES = { "claude-haiku-5-5": "Haiku 5.5", "claude-sonnet-5-5": "Sonnet 5.5", "claude-opus-5-5": "Opus 5.5" };
 function providerFromValue(v) {
+  if (v.startsWith("api:")) return { kind: "claude_api", model: v.slice(4), effort: settings.provider.kind === "claude_api" ? settings.provider.effort || "" : "" };
   if (v === "local") return settings.provider.kind === "local" ? settings.provider : { kind: "local", base_url: "http://127.0.0.1:11434/v1", model: "gemma4-it:12b" };
-  return { kind: "cursor_cli", model: settings.provider.kind === "cursor_cli" ? settings.provider.model : "" };
+  if (v === "cursor") return { kind: "cursor_cli", model: settings.provider.kind === "cursor_cli" ? settings.provider.model : "" };
+  return { kind: "claude_cli", model: v.split(":")[1] };
 }
-const providerLabel = () => { const p = settings.provider; return p.kind === "local" ? `${p.model} (local)` : "Cursor (cloud)"; };
+const providerLabel = () => { const p = settings.provider; return p.kind === "local" ? `${p.model} (local)` : p.kind === "cursor_cli" ? "Cursor (cloud)" : p.kind === "claude_api" ? `Claude ${API_NAMES[p.model] || p.model}${p.effort ? " · " + p.effort : ""} (API)` : `Claude ${p.model} (cloud)`; };
 async function saveQuick(patch) {
   try { settings = { ...settings, ...patch }; await post("/api/settings", settings); toast("Saved"); } catch (e) { toast(e.message, true); }
 }
@@ -924,6 +933,7 @@ async function saveSettings() {
 
 // ───── monitor ─────
 let monT = 0, monData = null;
+const money = (x) => "$" + (x >= 100 ? x.toFixed(0) : x.toFixed(2));
 const ago = (iso) => { if (!iso) return "never"; const s = Math.round((Date.now() - new Date(iso)) / 1000); return s < 60 ? `${s} s ago` : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`; };
 const dur = (s) => s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${(s / 3600).toFixed(1)} h` : `${(s / 86400).toFixed(1)} days`;
 async function loadMonitor() {
@@ -941,10 +951,14 @@ function renderMonitor() {
     [d.speech === "busy" ? "busy" : "ok", "Speech", d.speech],
     ["ok", "Speakers", d.speakers],
     ["ok", "Writer", d.writer + (d.local_server ? " · local server running" : "")],
+    [d.api_key === "none" ? "warn" : "ok", "API key", d.api_key === "none" ? "none · add it on the laptop: Settings → Claude API" : d.api_key],
     [remoteOk ? "ok" : "err", "Phone server", d.remote],
     [!w.enabled ? "" : w.running ? "ok" : "err", "Watchdog", !w.enabled ? "off · turn on in the laptop's Settings" : `${w.running ? w.state : "not running"} · checked ${ago(w.last_check)}${w.restarts_24h ? ` · ${w.restarts_24h} restart${w.restarts_24h > 1 ? "s" : ""} in 24 h` : ""}`],
   ];
   $("mon-status").innerHTML = rows.map(([dot, k, v]) => `<div class="mon-row"><span class="mon-dot ${dot}"></span><span class="k">${k}</span><span class="v" dir="auto">${esc(v)}</span></div>`).join("");
+  $("sp-today").textContent = money(d.spend_today);
+  $("sp-month").textContent = money(d.spend_month);
+  $("sp-total").textContent = money(d.spend_total);
   const f = segVal("mon-filter");
   const lines = d.log.filter((l) => f === "all" || (f === "warn" ? l.level !== "INFO" : l.level === "ERROR")).reverse();
   $("mon-log").innerHTML = lines.length
@@ -983,7 +997,7 @@ async function brainTick() {
 }
 function renderBrainStatus() {
   const s = brainSt; if (!s) return;
-  if (settings) { const p = settings.brain_provider; $("b-engine").value = !p ? "same" : p.kind === "local" ? "local" : "cursor"; }
+  if (settings) { const p = settings.brain_provider; $("b-engine").value = !p ? "same" : p.kind === "local" ? "local" : p.kind === "claude_api" ? `api:${p.model}` : "same"; }
   const p = progress["brain-index"];
   const todo = s.meetings - s.indexed + s.out_of_date + s.untagged;
   const parts = [`${s.indexed} of ${s.meetings} meetings indexed`];
@@ -1087,8 +1101,8 @@ $("st-save").onclick = saveSettings;
 $("b-engine").onchange = () => {
   const v = $("b-engine").value;
   const local = settings.provider.kind === "local" ? settings.provider : { kind: "local", base_url: "http://127.0.0.1:11434/v1", model: "gemma4-it:12b" };
-  const cursor = { kind: "cursor_cli", model: settings.provider.kind === "cursor_cli" ? settings.provider.model : "" };
-  saveQuick({ brain_provider: v === "same" ? null : v === "local" ? local : cursor });
+  const effort = settings.provider.kind === "claude_api" ? settings.provider.effort || "" : "high";
+  saveQuick({ brain_provider: v === "same" ? null : v === "local" ? local : { kind: "claude_api", model: v.slice(4), effort } });
 };
 $("theme").onclick = toggleTheme;
 $("b-ask").onclick = brainAsk;

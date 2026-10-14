@@ -115,8 +115,17 @@
                 </div>
                 <div class="field"><label>04 / Engine</label>
                   <select id="o-provider">
-                    <option value="local">Local · private</option>
+<optgroup label="Claude API · your credits">
+                      <option value="api:claude-haiku-5-5">Haiku 5.5 · API</option>
+                      <option value="api:claude-sonnet-5-5">Sonnet 5.5 · API</option>
+                      <option value="api:claude-opus-5-5">Opus 5.5 · API</option>
+                    </optgroup>
+                    <optgroup label="Other">
+                    <option value="claude:haiku">Haiku · Claude Code</option>
+                    <option value="claude:sonnet">Sonnet · Claude Code</option>
                     <option value="cursor">Cursor · cloud</option>
+                    <option value="local">Local · private</option>
+                    </optgroup>
                   </select>
                 </div>
               </div>
@@ -171,7 +180,7 @@
             <input id="b-q" dir="auto" placeholder="// ask anything across your meetings" />
             <button id="b-ask" class="go">ASK</button>
           </div>
-          <div class="b-status"><span id="b-status-text">// …</span><select id="b-engine" class="b-engine" title="Engine for the Brain (tagging and questions)"><option value="same">Engine: same as minutes</option><option value="local">Engine: Local · private</option><option value="cursor">Engine: Cursor · cloud</option></select><button id="b-index-all" class="hbtn accent">INDEX ALL</button></div>
+          <div class="b-status"><span id="b-status-text">// …</span><select id="b-engine" class="b-engine" title="Engine for the Brain (tagging and questions)"><option value="same">Engine: same as minutes</option><option value="local">Engine: Local · private</option><option value="api:claude-haiku-5-5">Engine: Haiku 5.5 · API</option><option value="api:claude-sonnet-5-5">Engine: Sonnet 5.5 · API</option><option value="api:claude-opus-5-5">Engine: Opus 5.5 · API</option><option value="cursor">Engine: Cursor · cloud</option></select><button id="b-index-all" class="hbtn accent">INDEX ALL</button></div>
         </div>
         <div class="brain-body">
           <aside class="b-side">
@@ -261,7 +270,7 @@
               <div class="section-title">Writing</div>
               <div class="export-card">
                 <div class="field"><label>W1 / Engine</label>
-                  <div class="fmt-row" id="s-engine"><div class="fmt-opt" data-v="local">LOCAL · PRIVATE</div><div class="fmt-opt" data-v="cursor">CURSOR · CLOUD</div></div>
+                  <div class="fmt-row" id="s-engine"><div class="fmt-opt" data-v="local">LOCAL · PRIVATE</div><div class="fmt-opt" data-v="api">CLAUDE API</div><div class="fmt-opt" data-v="cursor">CURSOR</div><div class="fmt-opt" data-v="claude">CLAUDE CODE</div></div>
                 </div>
                 <div class="field-row">
                   <div class="field"><label>W2 / Output language</label>
@@ -290,6 +299,25 @@
                 <div class="card-sub">Cursor</div>
                 <div class="field"><label>W11 / Cursor model</label><input id="s-cursor-model" spellcheck="false" placeholder="// blank = your account's default" /></div>
                 <div class="field-note">// Sends the transcript to Cursor with your Cursor login (<code>agent -p</code>, read-only ask mode). Install once: <code>irm 'https://cursor.com/install?win32=true' | iex</code>, then <code>agent login</code>.</div>
+                <div class="card-sub">Claude API</div>
+                <div id="api-status" class="sys-grid"></div>
+                <div class="field"><label>W12 / API key</label>
+                  <div class="input-row"><input id="s-api-key" type="password" autocomplete="off" spellcheck="false" placeholder="// paste a key from platform.claude.com (sk-ant-…)" /><button id="btn-api-save" class="hbtn accent">SAVE KEY</button><button id="btn-api-test" class="hbtn">TEST</button><button id="btn-api-del" class="hbtn danger">REMOVE</button></div>
+                </div>
+                <div class="field-row">
+                  <div class="field"><label>W13 / Model</label>
+                    <div class="fmt-row" id="s-api-model"><div class="fmt-opt" data-v="claude-haiku-5-5">HAIKU 5.5</div><div class="fmt-opt" data-v="claude-sonnet-5-5">SONNET 5.5</div><div class="fmt-opt" data-v="claude-opus-5-5">OPUS 5.5</div></div>
+                  </div>
+                  <div class="field"><label>W14 / Effort</label>
+                    <div class="fmt-row" id="s-effort"><div class="fmt-opt" data-v="">DEFAULT</div><div class="fmt-opt" data-v="low">LOW</div><div class="fmt-opt" data-v="medium">MED</div><div class="fmt-opt" data-v="high">HIGH</div></div>
+                  </div>
+                </div>
+                <div class="field-note">// Bring your own key. It is checked, then kept in the Windows Credential Manager, never in Mahdar's files or log. The transcript is sent to Anthropic and billed to your API credits; spend is shown in // 04 Monitor.</div>
+                <div class="card-sub">Claude Code</div>
+                <div class="field"><label>W15 / Model</label>
+                  <div class="fmt-row" id="s-claude-model"><div class="fmt-opt" data-v="haiku">HAIKU</div><div class="fmt-opt" data-v="sonnet">SONNET</div><div class="fmt-opt" data-v="opus">OPUS</div></div>
+                </div>
+                <div class="field-note">// Runs <code>claude -p</code> with your own Claude Code login.</div>
               </div>
             </section>
 
@@ -310,7 +338,7 @@
               <div class="section-title">Brain</div>
               <div class="export-card">
                 <div class="field"><label>B1 / Engine for tags and questions</label>
-                  <div class="fmt-row" id="s-brain-engine"><div class="fmt-opt" data-v="same">SAME AS WRITING</div><div class="fmt-opt" data-v="local">LOCAL</div><div class="fmt-opt" data-v="cursor">CURSOR</div></div>
+                  <div class="fmt-row" id="s-brain-engine"><div class="fmt-opt" data-v="same">SAME AS WRITING</div><div class="fmt-opt" data-v="local">LOCAL</div><div class="fmt-opt" data-v="api">CLAUDE API</div><div class="fmt-opt" data-v="cursor">CURSOR</div></div>
                 </div>
                 <div class="field-note">// The search model always runs on this laptop; B1 is only for tagging meetings and answering questions across them.</div>
               </div>

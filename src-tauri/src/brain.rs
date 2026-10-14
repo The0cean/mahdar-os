@@ -114,7 +114,7 @@ fn index_meeting(app: &AppHandle, id: &str) -> anyhow::Result<bool> {
     let settings = state.store.load_settings();
     let prompt = tags::prompt(&m.title, &m.created.format("%d %b %Y").to_string(), &m.transcript_text(), &settings.glossary, &brain.entities_all()?);
     let what = format!("Brain tags for “{}”", m.title);
-    let tagged = crate::write_with(app, &settings.brain_engine(), "brain-tag", &what, &prompt)
+    let tagged = crate::write_with(app, &settings.brain_engine(), "brain-tag", &what, &prompt, false)
         .map_err(anyhow::Error::msg)
         .and_then(|(reply, _)| tags::parse(&reply))
         .and_then(|t| {
@@ -257,7 +257,7 @@ pub fn ask(app: &AppHandle, b: &AskBody) -> CmdResult<AskRow> {
     let meetings = hits.iter().map(|h| &h.doc_id).collect::<std::collections::HashSet<_>>().len();
     let what = format!("Brain question over {} excerpts from {meetings} meeting{}", hits.len(), if meetings == 1 { "" } else { "s" });
     let engine = app.state::<crate::AppState>().store.load_settings().brain_engine();
-    let (reply, provider) = crate::write_with(app, &engine, ASK_JOB, &what, &ask::prompt(q, &hits))?;
+    let (reply, provider) = crate::write_with(app, &engine, ASK_JOB, &what, &ask::prompt(q, &hits), false)?;
     let (answer, cites) = ask::cite(&reply, &hits);
     let scope = match &filter.entity {
         Some(k) => brain.entity_page(k).ok().flatten().map(|p| p.entity.name).unwrap_or_default(),

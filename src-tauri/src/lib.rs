@@ -136,6 +136,51 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     Ok(())
 }
 
+// ---------- Claude API key ----------
+
+#[derive(Serialize)]
+struct ApiKeyStatus {
+    /// Masked key, e.g. "sk-ant-…WXYZ"; empty when none.
+    masked: String,
+    /// "Mahdar", "Mizan" (shared from Mizan's Settings) or "environment".
+    source: String,
+}
+
+#[tauri::command]
+fn api_key_status() -> ApiKeyStatus {
+    match mahdar_core::secrets::anthropic_key() {
+        Some((k, src)) => ApiKeyStatus { masked: mahdar_core::secrets::mask(&k), source: src.into() },
+        None => ApiKeyStatus { masked: String::new(), source: String::new() },
+    }
+}
+
+#[tauri::command]
+async fn api_key_save(key: String) -> CmdResult<String> {
+    let key = key.trim().to_string();
+    if !key.starts_with("sk-ant-") {
+        return Err("that doesn't look like a Claude API key (they start with sk-ant-)".into());
+    }
+    // Check it before saving, so a typo isn't stored.
+    let k = key.clone();
+    let msg = tauri::async_runtime::spawn_blocking(move || summarize::test_api_key(&k)).await.map_err(err)?.map_err(err)?;
+    mahdar_core::secrets::set_anthropic_key(&key).map_err(err)?;
+    log::info("settings", format!("Claude API key saved ({})", mahdar_core::secrets::mask(&key)));
+    Ok(msg)
+}
+
+#[tauri::command]
+async fn api_key_test() -> CmdResult<String> {
+    let (k, _) = mahdar_core::secrets::anthropic_key().ok_or("no key saved")?;
+    tauri::async_runtime::spawn_blocking(move || summarize::test_api_key(&k)).await.map_err(err)?.map_err(err)
+}
+
+#[tauri::command]
+fn api_key_delete() -> CmdResult<()> {
+    mahdar_core::secrets::delete_anthropic_key().map_err(err)?;
+    log::info("settings", "Claude API key removed from Mahdar");
+    Ok(())
+}
+
 /// Files copied in Explorer (Ctrl+C), for PASTE / Ctrl+V on the library screen.
 #[tauri::command]
 fn clipboard_files() -> CmdResult<Vec<String>> {
@@ -197,6 +242,10 @@ pub(crate) struct Monitor {
     local_server: bool,
     remote: String,
     jobs: Vec<JobInfo>,
+    api_key: String,
+    spend_today: f64,
+    spend_month: f64,
+    spend_total: f64,
     watchdog: watchdog::Status,
     log: Vec<log::Line>,
 }
@@ -238,6 +287,11 @@ pub(crate) fn monitor(app: &AppHandle, lines: usize) -> Monitor {
             total: p.total,
         })
         .collect();
+    let api_key = match mahdar_core::secrets::anthropic_key() {
+        Some((k, src)) => format!("{} · saved in {src}", mahdar_core::secrets::mask(&k)),
+        None => "none".into(),
+    };
+    let spend = state.store.spend();
     Monitor {
         version: env!("CARGO_PKG_VERSION"),
         pid: std::process::id(),
@@ -249,6 +303,10 @@ pub(crate) fn monitor(app: &AppHandle, lines: usize) -> Monitor {
         local_server,
         remote: if s.remote_enabled { state.remote_state.lock().unwrap().clone() } else { "off".into() },
         jobs,
+        api_key,
+        spend_today: spend.today(),
+        spend_month: spend.this_month(),
+        spend_total: spend.total,
         watchdog: watchdog::status(state.store.root(), s.watchdog),
         log: log::tail(lines),
     }
@@ -750,13 +808,13 @@ fn export_docx(state: State<AppState>, id: String, output_id: Option<String>, pa
 /// Send a prompt to the configured writer, starting the local server if needed.
 /// `what` names the job in the log, e.g. "Minutes of Meeting for “<title>”".
 /// Returns (text, provider label).
-pub(crate) fn write_with_provider(app: &AppHandle, id: &str, what: &str, prompt: &str) -> CmdResult<(String, String)> {
+pub(crate) fn write_with_provider(app: &AppHandle, id: &str, what: &str, prompt: &str, reuse: bool) -> CmdResult<(String, String)> {
     let provider = app.state::<AppState>().store.load_settings().provider;
-    write_with(app, &provider, id, what, prompt)
+    write_with(app, &provider, id, what, prompt, reuse)
 }
 
 /// Like [`write_with_provider`], with an explicit engine (the Brain has its own setting).
-pub(crate) fn write_with(app: &AppHandle, provider: &Provider, id: &str, what: &str, prompt: &str) -> CmdResult<(String, String)> {
+pub(crate) fn write_with(app: &AppHandle, provider: &Provider, id: &str, what: &str, prompt: &str, reuse: bool) -> CmdResult<(String, String)> {
     let state = app.state::<AppState>();
     let local = state.store.load_settings().local;
     let label = provider.label();
@@ -781,14 +839,21 @@ pub(crate) fn write_with(app: &AppHandle, provider: &Provider, id: &str, what: &
         let _ = app.emit("gen-stage", (id.to_string(), "writing"));
     }
     report(app, Progress { id: id.to_string(), stage: "writing".into(), done: 0, total: 0 });
-    let res = summarize::generate(provider, prompt, &local);
+    let res = summarize::generate(provider, prompt, reuse, &local);
     clear_progress(app, id);
-    let text = res.map_err(|e| {
+    let reply = res.map_err(|e| {
         log::error("writer", format!("{what} failed after {} s: {e:#}", t0.elapsed().as_secs()));
         err(e)
     })?;
-    log::info("writer", format!("{what} done in {} s", t0.elapsed().as_secs()));
-    Ok((text, label))
+    let cost = match reply.cost_usd {
+        Some(usd) => {
+            let _ = state.store.add_spend(usd);
+            format!(" · ${usd:.3} · {}", reply.usage)
+        }
+        None => String::new(),
+    };
+    log::info("writer", format!("{what} done in {} s{cost}", t0.elapsed().as_secs()));
+    Ok((reply.text, label))
 }
 
 #[tauri::command]
@@ -821,7 +886,7 @@ pub(crate) fn do_generate(app: &AppHandle, id: &str, template_id: &str) -> CmdRe
         let prompt =
             summarize::build_prompt(&template, &settings.output_language, &m.title, &m.transcript_text(), &settings.glossary);
         let what = format!("{} for \u{201c}{}\u{201d}", template.name, m.title);
-        let (text, provider) = write_with_provider(&app, &id, &what, &prompt)?;
+        let (text, provider) = write_with_provider(&app, &id, &what, &prompt, false)?;
         let out = Output {
             id: uuid::Uuid::new_v4().to_string(),
             template_id: template.id,
@@ -865,7 +930,7 @@ pub(crate) fn do_ask(app: &AppHandle, id: &str, question: &str) -> CmdResult<Cha
             m.chat.iter().rev().take(6).rev().map(|c| (c.role.clone(), c.text.clone())).collect();
         let prompt = summarize::build_question(&m.title, &m.transcript_text(), &settings.glossary, &history, question.trim());
         let what = format!("question about \u{201c}{}\u{201d}", m.title);
-        let (text, provider) = write_with_provider(&app, &id, &what, &prompt)?;
+        let (text, provider) = write_with_provider(&app, &id, &what, &prompt, true)?;
         let q = ChatMsg { role: "user".into(), text: question.trim().into(), created: Local::now(), provider: String::new() };
         let a = ChatMsg { role: "assistant".into(), text, created: Local::now(), provider };
         let mut m = state.store.load_meeting(&id).map_err(err)?;
@@ -1020,6 +1085,10 @@ pub fn run() {
             remote_info,
             remote_new_token,
             remote_setup_https,
+            api_key_status,
+            api_key_save,
+            api_key_test,
+            api_key_delete,
             monitor_snapshot,
             brain::brain_status,
             brain::brain_index,
