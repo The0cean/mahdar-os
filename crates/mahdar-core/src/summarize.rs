@@ -66,7 +66,8 @@ The transcript was produced by speech recognition from a business meeting that m
 (Egyptian, Gulf, Levantine dialects and MSA) and English; English terms are often written in \
 Arabic script. Recognition errors exist: infer the \
 intended meaning from context, but never invent facts, names, numbers or decisions that are not \
-supported by the transcript. If something is unclear, say so briefly. Output Markdown only.";
+supported by the transcript. If something is unclear, say so briefly. Output Markdown only. \
+Begin directly with the requested output: no preamble, and no remarks about reading files or what you are about to do.";
 
 pub fn builtin_templates() -> Vec<Template> {
     let t = |id: &str, name: &str, prompt: &str| Template {
@@ -155,8 +156,10 @@ pub fn build_question(title: &str, transcript: &str, glossary: &str, history: &[
         prior.push_str(&format!("{}: {}\n\n", if role == "user" { "Q" } else { "A" }, text));
     }
     format!(
-        "Answer the question using only this meeting's transcript. Be concise. Cite the timestamps you rely on, \
-         like [12:34]. If the transcript doesn't contain the answer, say so plainly. Answer in the language of the question.{}\n\n\
+        "Answer the question from this meeting's transcript. Be concise unless asked for detail. Cite the timestamps you rely on, \
+         like [12:34]. If the transcript doesn't contain what the question needs, say so plainly. When asked what you think, or for \
+         advice, suggestions, risks or next steps, give your own view: direct and practical, based on the transcript, and kept \
+         clearly apart from what was actually said. Answer in the language of the question.{}\n\n\
          Meeting title: {}\n\n<transcript>\n{}\n</transcript>\n\n{}{}Q: {}",
         glossary_block(glossary),
         title,
@@ -430,7 +433,7 @@ fn cursor_cli_with(model: &str, prompt: &str, direct: bool) -> Result<String> {
     std::fs::create_dir_all(&ws)?;
     std::fs::write(ws.join("mahdar_request.md"), format!("# Instructions\n\n{SYSTEM}\n\n{prompt}\n"))?;
     let mut cmd = cursor_command(direct);
-    cmd.args(["-p", "--output-format", "json", "--mode", "ask", "--trust", "--workspace"])
+    cmd.args(["-p", "--output-format", "stream-json", "--mode", "ask", "--trust", "--workspace"])
         .arg(&ws)
         .current_dir(&ws);
     if !model.trim().is_empty() {
@@ -460,17 +463,58 @@ fn cursor_cli_with(model: &str, prompt: &str, direct: bool) -> Result<String> {
         }
         bail!("Cursor CLI failed: {msg}");
     }
-    // JSON mode ends with a result object; fall back to raw text if the shape differs.
-    let text = stdout
-        .lines()
-        .rev()
-        .find_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .and_then(|v| v["result"].as_str().map(str::to_string))
-        .unwrap_or(stdout);
+    let text = cursor_answer(&stdout);
     if text.trim().is_empty() {
         bail!("Cursor returned no text. Run `agent login` (or check `agent status`).");
     }
     Ok(text.trim().to_string())
+}
+
+/// The answer from Cursor's stream-json output: only the assistant text after its last
+/// tool call. The agent narrates before reading the request file ("I'll read the file
+/// first."), and the final `result` field joins that narration onto the answer.
+fn cursor_answer(stdout: &str) -> String {
+    let mut after_tools = String::new();
+    let mut result = None;
+    let mut events = 0;
+    for v in stdout.lines().filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok()) {
+        events += 1;
+        match v["type"].as_str() {
+            Some("tool_call") => after_tools.clear(),
+            Some("assistant") => {
+                for b in v["message"]["content"].as_array().into_iter().flatten() {
+                    if let Some(t) = b["text"].as_str() {
+                        after_tools.push_str(t);
+                    }
+                }
+            }
+            Some("result") => result = v["result"].as_str().map(str::to_string),
+            _ => {}
+        }
+    }
+    let text = if !after_tools.trim().is_empty() {
+        after_tools
+    } else if let Some(r) = result {
+        r
+    } else if events == 0 {
+        stdout.to_string()
+    } else {
+        String::new()
+    };
+    strip_preamble(text.trim()).to_string()
+}
+
+/// Drop a leading "I'll read the file first." style sentence, in case it still gets through.
+fn strip_preamble(text: &str) -> &str {
+    let end = text.find(['\n', '.', ':']).map(|i| i + 1).unwrap_or(text.len());
+    let first = text[..end].to_lowercase();
+    let narrates = ["i'll", "i will", "let me", "i'm going to", "first,"].iter().any(|w| first.starts_with(w));
+    let about_file = ["read", "file", "request", "instructions", "open", "look at"].iter().any(|w| first.contains(w));
+    if end < 160 && narrates && about_file {
+        text[end..].trim_start()
+    } else {
+        text
+    }
 }
 
 /// Default context window for FastFlowLM: enough for ~1.5 h of transcript.
@@ -620,6 +664,25 @@ mod tests {
         println!("answer: {}
 cost: ${:.5} · {}", r.text, r.cost_usd.unwrap(), r.usage);
         assert!(r.text.contains("Speaker 2"));
+    }
+
+    #[test]
+    fn cursor_keeps_only_the_answer() {
+        let out = [
+            r#"{"type":"system","subtype":"init","model":"x"}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I'll read the file first."}]}}"#,
+            r#"{"type":"tool_call","subtype":"started","call_id":"1","tool_call":{}}"#,
+            r#"{"type":"tool_call","subtype":"completed","call_id":"1","tool_call":{}}"#,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"- [ ] Re-check the scope"}]}}"#,
+            r#"{"type":"result","subtype":"success","result":"I'll read the file first.- [ ] Re-check the scope"}"#,
+        ]
+        .join("\n");
+        assert_eq!(cursor_answer(&out), "- [ ] Re-check the scope");
+        // Only a result line: the preamble is cut from it.
+        let only = r#"{"type":"result","subtype":"success","result":"I'll read the file first.- [ ] Re-check the scope"}"#;
+        assert_eq!(cursor_answer(only), "- [ ] Re-check the scope");
+        assert_eq!(cursor_answer("plain text answer"), "plain text answer");
+        assert_eq!(strip_preamble("I will send the report: Thursday"), "I will send the report: Thursday");
     }
 
     #[test]

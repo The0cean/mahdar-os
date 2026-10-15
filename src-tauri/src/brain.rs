@@ -243,9 +243,16 @@ pub struct AskBody {
     pub from: Option<String>,
     #[serde(default)]
     pub to: Option<String>,
+    /// Follow up this conversation (id of its first question).
+    #[serde(default)]
+    pub thread: Option<i64>,
 }
 
-/// Answer a question from the best excerpts across all indexed meetings (blocking).
+/// Earlier turns sent with a follow-up.
+const HISTORY: usize = 6;
+
+/// Answer a question from the best excerpts across all indexed meetings (blocking). With a
+/// thread, earlier questions and answers go along, so follow-ups like "what do you think?" work.
 pub fn ask(app: &AppHandle, b: &AskBody) -> CmdResult<AskRow> {
     let q = b.question.trim();
     if q.is_empty() {
@@ -255,23 +262,41 @@ pub fn ask(app: &AppHandle, b: &AskBody) -> CmdResult<AskRow> {
     if brain.indexed().map_err(err)?.is_empty() {
         return Err("nothing is indexed yet: press INDEX ALL in Brain first".into());
     }
-    let qv = with_embedder(app, ASK_JOB, |e| e.query(q)).map_err(err)?;
+    let history: Vec<(String, String)> = match b.thread {
+        Some(t) => {
+            let rows = brain.thread(t).map_err(err)?;
+            if rows.is_empty() {
+                return Err("that conversation was deleted: ask it as a new question".into());
+            }
+            let skip = rows.len().saturating_sub(HISTORY);
+            rows.into_iter().skip(skip).map(|r| (r.question, r.answer)).collect()
+        }
+        None => Vec::new(),
+    };
+    // A follow-up ("and the deadline?", "what do you think?") is searched together with the
+    // question before it, so it finds the same meetings.
+    let search_q = match history.last() {
+        Some((prev, _)) => format!("{prev}\n{q}"),
+        None => q.to_string(),
+    };
+    let qv = with_embedder(app, ASK_JOB, |e| e.query(&search_q)).map_err(err)?;
     let filter = Filter { entity: b.entity.clone().filter(|s| !s.is_empty()), from: b.from.clone(), to: b.to.clone() };
-    let hits = brain.search(q, Some(&qv), &filter, TOP_K).map_err(err)?;
+    let hits = brain.search(&search_q, Some(&qv), &filter, TOP_K).map_err(err)?;
     if hits.is_empty() {
         return Err("no indexed meeting matches that filter".into());
     }
     let meetings = hits.iter().map(|h| &h.doc_id).collect::<std::collections::HashSet<_>>().len();
     let what = format!("Brain question over {} excerpts from {meetings} meeting{}", hits.len(), if meetings == 1 { "" } else { "s" });
     let engine = app.state::<crate::AppState>().store.load_settings().brain_engine();
-    let (reply, provider) = crate::write_with(app, &engine, ASK_JOB, &what, &ask::prompt(q, &hits), false)?;
+    let (reply, provider) = crate::write_with(app, &engine, ASK_JOB, &what, &ask::prompt(q, &hits, &history), false)?;
     let (answer, cites) = ask::cite(&reply, &hits);
     let scope = match &filter.entity {
         Some(k) => brain.entity_page(k).ok().flatten().map(|p| p.entity.name).unwrap_or_default(),
         None => String::new(),
     };
-    let id = brain.save_ask(q, &answer, &cites, &provider, &scope).map_err(err)?;
-    Ok(AskRow { id, question: q.into(), answer, citations: cites, provider, scope, created: chrono::Local::now().to_rfc3339() })
+    let id = brain.save_ask(q, &answer, &cites, &provider, &scope, b.thread).map_err(err)?;
+    let thread = b.thread.unwrap_or(id);
+    Ok(AskRow { id, question: q.into(), answer, citations: cites, provider, scope, created: chrono::Local::now().to_rfc3339(), thread })
 }
 
 pub fn entities(app: &AppHandle) -> CmdResult<Vec<EntityRow>> {
@@ -283,7 +308,7 @@ pub fn entity(app: &AppHandle, key: &str) -> CmdResult<EntityPage> {
 }
 
 pub fn asks(app: &AppHandle) -> CmdResult<Vec<AskRow>> {
-    db(app).and_then(|b| b.asks(20)).map_err(err)
+    db(app).and_then(|b| b.asks(60)).map_err(err)
 }
 
 /// A deleted meeting leaves the Brain too.
@@ -318,8 +343,18 @@ pub fn brain_entity(app: AppHandle, key: String) -> CmdResult<EntityPage> {
 }
 
 #[tauri::command]
-pub async fn brain_ask(app: AppHandle, question: String, entity: Option<String>) -> CmdResult<AskRow> {
-    tauri::async_runtime::spawn_blocking(move || ask(&app, &AskBody { question, entity, ..Default::default() })).await.map_err(err)?
+pub async fn brain_ask(app: AppHandle, question: String, entity: Option<String>, thread: Option<i64>) -> CmdResult<AskRow> {
+    tauri::async_runtime::spawn_blocking(move || ask(&app, &AskBody { question, entity, thread, ..Default::default() })).await.map_err(err)?
+}
+
+#[tauri::command]
+pub fn brain_thread(app: AppHandle, thread: i64) -> CmdResult<Vec<AskRow>> {
+    db(&app).and_then(|b| b.thread(thread)).map_err(err)
+}
+
+#[tauri::command]
+pub fn brain_delete_thread(app: AppHandle, thread: i64) -> CmdResult<()> {
+    db(&app).and_then(|b| b.delete_thread(thread)).map_err(err)
 }
 
 #[tauri::command]

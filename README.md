@@ -17,7 +17,8 @@ After that Mahdar updates itself: new versions download in the background from t
 - **Speakers**: [NVIDIA Streaming Sortformer 4spk v2.1](https://huggingface.co/nvidia/diar_streaming_sortformer_4spk-v2.1) (NVIDIA Open Model License) runs first, up to 4 speakers, and transcription chunks follow the speaker turns. Click a label to rename the speaker or reassign the line. The names are used in the minutes.
 - **Watch folder**: new recordings in a chosen folder are imported automatically. Files already there when the folder is chosen are skipped.
 - **Edit**: double-click a line to correct it. A names & terms glossary is passed to the minutes writer and to Ask.
-- **Ask**: Q&A about a meeting. Answers cite clickable `[mm:ss]` timestamps.
+- **Ask**: Q&A about a meeting. Answers cite clickable `[mm:ss]` timestamps. You can also ask what it thinks or what it suggests.
+- **Brain**: questions across all meetings, as conversations: follow up, or ask for its view and suggestions. Only the best ~20 excerpts are sent to the writer.
 - **Export**: Word (.docx) for outputs and the transcript, PDF through the print dialog, and Markdown.
 - **Unclear parts**: FIX UNCLEAR, or ↻ on a single line, re-runs that audio in smaller pieces.
 - **Writers**: a local OpenAI-compatible server (the default; FastFlowLM is started automatically when it isn't already running), the Claude API (bring your own key, kept in Windows Credential Manager; spend is shown in Monitor), Claude Code (`claude -p`) or Cursor (`agent -p`).
