@@ -55,7 +55,7 @@ interface ItemRow { kind: string; text: string; owner: string; due: string; ts: 
 interface MentionRow { meeting_id: string; title: string; created: string; summary: string; timestamps: number[]; items: ItemRow[] }
 interface EntityPage { entity: EntityRow; mentions: MentionRow[] }
 interface Citation { n: number; meeting_id: string; title: string; start_s: number; speaker: string | null }
-interface AskRow { id: number; question: string; answer: string; citations: Citation[]; provider: string; scope: string; created: string }
+interface AskRow { id: number; question: string; answer: string; citations: Citation[]; provider: string; scope: string; created: string; thread: number }
 interface LogLine { time: string; level: "INFO" | "WARN" | "ERROR"; source: string; msg: string }
 interface Monitor {
   version: string; pid: number; started: string; uptime_s: number; speech: string; speakers: string;
@@ -159,6 +159,9 @@ let brainEntities: EntityRow[] = [];
 let brainEntity: string | null = null; // open entity page / ask scope
 let brainShowing: "home" | "entity" | "answer" = "home";
 let brainAsking = false;
+let brainThread: number | null = null; // open conversation (id of its first question)
+let brainRows: AskRow[] = []; // its questions and answers, oldest first
+let brainPending = ""; // question being answered in the open conversation
 const KIND_LABEL: Record<string, string> = { person: "People", org: "Organisations", initiative: "Initiatives", topic: "Topics" };
 const shortTitle = (t: string) => (t.length > 26 ? t.slice(0, 25) + "…" : t);
 
@@ -230,13 +233,23 @@ async function renderBrainHome() {
   brainShowing = "home";
   let asks: AskRow[] = [];
   try { asks = await invoke<AskRow[]>("brain_asks"); } catch {}
+  // Newest first; one row per conversation, titled by its first question.
+  const threads = new Map<number, AskRow[]>();
+  for (const a of asks) threads.set(a.thread, [...(threads.get(a.thread) ?? []), a]);
+  const rows = [...threads.entries()].slice(0, 20).map(([t, list]) => {
+    const first = list[list.length - 1];
+    const n = list.length > 1 ? ` <span class="tag">${list.length} questions</span>` : "";
+    return `<button class="b-recent" data-t="${t}">${esc(first.question)}${n}${first.scope ? ` <span class="tag">${esc(first.scope)}</span>` : ""}</button>`;
+  });
   $("b-main").innerHTML = `<div class="inner">${
-    asks.length
-      ? `<div class="section-title">Recent questions</div>` + asks.map((a) => `<button class="b-recent" data-id="${a.id}">${esc(a.question)}${a.scope ? ` <span class="tag">${esc(a.scope)}</span>` : ""}</button>`).join("")
-      : `<div class="placeholder">// Ask a question above: Mahdar searches every indexed meeting on this laptop, then sends only the best ~20 excerpts to the writer (${esc(providerName())}).<br>// Click a person, organisation or topic on the left for its timeline across meetings.</div>`
+    rows.length
+      ? `<div class="section-title">Recent conversations</div>` + rows.join("")
+      : `<div class="placeholder">// Ask a question above: Mahdar searches every indexed meeting on this laptop, then sends only the best ~20 excerpts to the writer (${esc(brainEngineName())}).<br>// Then keep going: follow up, or ask what it thinks and what it suggests.<br>// Click a person, organisation or topic on the left for its timeline across meetings.</div>`
   }</div>`;
-  $("b-main").querySelectorAll<HTMLButtonElement>(".b-recent").forEach((b) => (b.onclick = () => { const a = asks.find((x) => x.id === Number(b.dataset.id)); if (a) renderAnswer(a); }));
+  $("b-main").querySelectorAll<HTMLButtonElement>(".b-recent").forEach((b) => (b.onclick = () => openThread(Number(b.dataset.t))));
 }
+/** The engine the Brain answers with. */
+const brainEngineName = () => providerName(settings.brain_provider ?? settings.provider);
 function setScope(key: string | null) {
   brainEntity = key;
   const e = brainEntities.find((x) => x.key === key);
@@ -265,41 +278,97 @@ async function openEntity(key: string) {
 function wireBrainLinks() {
   $("b-main").querySelectorAll<HTMLElement>("[data-m]").forEach((el) => (el.onclick = () => openAt(el.dataset.m!, Number(el.dataset.t ?? 0))));
 }
-function renderAnswer(a: AskRow) {
-  brainShowing = "answer";
-  renderBrainList();
+function turnHtml(a: AskRow) {
   const byN = new Map(a.citations.map((c) => [c.n, c]));
   let html = marked.parse(a.answer) as string;
-  html = html.replace(/\[#(\d+)\]/g, (all, n) => {
+  html = html.replace(/\[#(\d+)\]/g, (_all, n) => {
     const c = byN.get(Number(n));
     return c ? `<span class="b-cite" data-m="${esc(c.meeting_id)}" data-t="${c.start_s}" title="${esc(c.title)}">${esc(shortTitle(c.title))} · ${ts(c.start_s)}</span>` : "";
   });
-  $("b-main").innerHTML = `<div class="inner">
+  return `<div class="b-turn">
     <div class="b-q" dir="auto">${esc(a.question)}</div>
     <div class="b-meta">// ${esc(a.provider)}${a.scope ? ` · only ${esc(a.scope)}` : ""} · ${dateStr(a.created)}</div>
     <div class="md" dir="auto">${html}</div>
-    ${a.citations.length ? `<div class="b-srcs"><div class="section-title">Sources</div>${a.citations.map((c) => `<span class="b-src" data-m="${esc(c.meeting_id)}" data-t="${c.start_s}">${esc(c.title)} · ${ts(c.start_s)}${c.speaker ? ` · ${esc(c.speaker)}` : ""}</span>`).join("")}</div>` : ""}
+    ${a.citations.length ? `<details class="b-srcs"><summary class="section-title">Sources · ${a.citations.length}</summary>${a.citations.map((c) => `<span class="b-src" data-m="${esc(c.meeting_id)}" data-t="${c.start_s}">${esc(c.title)} · ${ts(c.start_s)}${c.speaker ? ` · ${esc(c.speaker)}` : ""}</span>`).join("")}</details>` : ""}
+  </div>`;
+}
+/** The open conversation: every question and answer, then a box to follow up. */
+function renderThread() {
+  brainShowing = "answer";
+  renderBrainList();
+  const draft = document.querySelector<HTMLTextAreaElement>("#b-follow")?.value ?? "";
+  const pending = brainPending
+    ? `<div class="b-turn"><div class="b-q" dir="auto">${esc(brainPending)}</div><div class="placeholder"><span class="spin-dots">// searching your meetings, then asking ${esc(brainEngineName())}…</span></div></div>`
+    : "";
+  $("b-main").innerHTML = `<div class="inner">
+    <div class="b-thread-head"><button class="hbtn" id="b-back">← ALL CONVERSATIONS</button>${brainThread !== null ? `<button class="hbtn danger" id="b-del-thread">DELETE</button>` : ""}</div>
+    ${brainRows.map(turnHtml).join("")}${pending}
+    ${brainThread !== null ? `<div class="b-follow">
+      <textarea id="b-follow" rows="2" dir="auto" placeholder="// follow up: what do you think? any suggestions? who owns that?"></textarea>
+      <button id="b-follow-go" class="go">${brainAsking ? "THINKING…" : "ASK"}</button>
+    </div>` : ""}
   </div>`;
   wireBrainLinks();
+  $("b-back").onclick = () => { brainThread = null; brainRows = []; renderBrainHome(); };
+  const del = document.getElementById("b-del-thread");
+  if (del) del.onclick = async () => {
+    if (brainThread === null || !(await askDialog("Delete this conversation?"))) return;
+    try { await invoke("brain_delete_thread", { thread: brainThread }); } catch (e) { return toast(String(e), true); }
+    brainThread = null; brainRows = [];
+    await renderBrainHome();
+  };
+  const box = document.querySelector<HTMLTextAreaElement>("#b-follow");
+  if (box) {
+    box.value = draft;
+    box.disabled = brainAsking;
+    ($("b-follow-go") as HTMLButtonElement).disabled = brainAsking;
+    box.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); brainAsk(true); } };
+    $("b-follow-go").onclick = () => brainAsk(true);
+    if (!brainAsking) box.focus();
+  }
+  $("b-main").scrollTop = $("b-main").scrollHeight;
 }
-async function brainAsk() {
-  const q = $<HTMLInputElement>("b-q").value.trim();
+async function openThread(thread: number) {
+  try { brainRows = await invoke<AskRow[]>("brain_thread", { thread }); } catch (e) { return toast(String(e), true); }
+  brainThread = thread;
+  renderThread();
+}
+/** Ask from the top box (a new conversation) or the follow-up box (the open one). */
+async function brainAsk(followUp: boolean) {
+  const input = followUp ? document.querySelector<HTMLTextAreaElement>("#b-follow") : $<HTMLInputElement>("b-q");
+  const q = input?.value.trim() ?? "";
   if (!q || brainAsking) return;
+  const thread = followUp ? brainThread : null;
+  if (!followUp) { brainThread = null; brainRows = []; }
   brainAsking = true;
+  brainPending = q;
+  input!.value = "";
   const btn = $<HTMLButtonElement>("b-ask");
   btn.disabled = true;
   btn.textContent = "THINKING…";
-  $("b-main").innerHTML = `<div class="inner"><div class="b-q" dir="auto">${esc(q)}</div><div class="placeholder">// searching your meetings, then asking ${esc(providerName())}…</div></div>`;
+  renderThread();
+  let failed = false;
   try {
-    renderAnswer(await invoke<AskRow>("brain_ask", { question: q, entity: brainEntity }));
-    $<HTMLInputElement>("b-q").value = "";
+    const row = await invoke<AskRow>("brain_ask", { question: q, entity: brainEntity, thread });
+    brainThread = row.thread;
+    brainRows = await invoke<AskRow[]>("brain_thread", { thread: row.thread }).catch(() => [...brainRows, row]);
   } catch (e) {
     toast(String(e), true);
-    await renderBrainHome();
+    failed = true;
   }
   brainAsking = false;
+  brainPending = "";
   btn.disabled = false;
   btn.textContent = "ASK";
+  if (brainShowing !== "answer") return; // moved on to something else; the answer is in Recent
+  if (!brainRows.length) {
+    await renderBrainHome();
+    if (failed) $<HTMLInputElement>("b-q").value = q;
+    return;
+  }
+  renderThread();
+  const box = document.querySelector<HTMLTextAreaElement>("#b-follow");
+  if (failed && box) box.value = q;
 }
 /** Open a meeting at a moment: transcript scrolled there, player ready to play from it. */
 async function openAt(id: string, t: number) {
@@ -848,6 +917,44 @@ async function closeSpeakerPop(saveName: boolean) {
   }
 }
 
+// ───────── transcript / outputs divider ─────────
+/** Drag the line between the transcript and the right panel; double-click resets it. */
+function initSplit() {
+  const layout = $("meeting-layout"), split = $("split");
+  const MIN_RIGHT = 300, MIN_LEFT = 360, DEFAULT = 400;
+  let width = Number(store.get("right-w")) || DEFAULT;
+  const apply = (w: number) => {
+    const max = Math.max(MIN_RIGHT, layout.clientWidth - MIN_LEFT);
+    width = Math.round(Math.min(Math.max(w, MIN_RIGHT), layout.clientWidth ? max : w));
+    layout.style.setProperty("--right-w", `${width}px`);
+  };
+  apply(width);
+  split.onpointerdown = (e) => {
+    e.preventDefault();
+    split.setPointerCapture(e.pointerId);
+    split.classList.add("drag");
+    document.body.classList.add("resizing");
+    const right = layout.getBoundingClientRect().right;
+    split.onpointermove = (ev) => apply(right - ev.clientX);
+    split.onpointerup = () => {
+      split.onpointermove = split.onpointerup = null;
+      split.classList.remove("drag");
+      document.body.classList.remove("resizing");
+      store.set("right-w", String(width));
+    };
+  };
+  split.ondblclick = () => { apply(DEFAULT); store.set("right-w", String(width)); };
+  split.onkeydown = (e) => {
+    const step = e.shiftKey ? 80 : 20;
+    if (e.key === "ArrowLeft") apply(width + step);
+    else if (e.key === "ArrowRight") apply(width - step);
+    else return;
+    e.preventDefault();
+    store.set("right-w", String(width));
+  };
+  window.addEventListener("resize", () => apply(width));
+}
+
 // ───────── ask ─────────
 function setMode(next: "outputs" | "ask") {
   mode = next;
@@ -1310,8 +1417,9 @@ async function init() {
     try { await invoke("api_key_delete"); await renderApiKey(); toast("Key removed"); } catch (e) { toast(String(e), true); }
   };
   $("mon-filter").addEventListener("click", () => setTimeout(renderMonitor));
-  $("b-ask").onclick = brainAsk;
-  $<HTMLInputElement>("b-q").onkeydown = (e) => { if (e.key === "Enter") brainAsk(); };
+  $("b-ask").onclick = () => brainAsk(false);
+  $<HTMLInputElement>("b-q").onkeydown = (e) => { if (e.key === "Enter") brainAsk(false); };
+  initSplit();
   $("b-filter").oninput = renderBrainList;
   $("b-scope").onclick = () => setScope(null);
   $("b-index-all").onclick = () => indexBrain(null);

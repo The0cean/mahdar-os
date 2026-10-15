@@ -49,9 +49,18 @@ CREATE TABLE IF NOT EXISTS items (
 );
 CREATE TABLE IF NOT EXISTS asks (
   id INTEGER PRIMARY KEY, question TEXT NOT NULL, answer TEXT NOT NULL, citations TEXT NOT NULL, provider TEXT NOT NULL,
-  scope TEXT NOT NULL DEFAULT '', created TEXT NOT NULL
+  scope TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, thread INTEGER
 );
 "#;
+
+/// Bring databases from older versions up to [`SCHEMA`].
+fn migrate(c: &Connection) -> Result<()> {
+    let has_thread = c.prepare("SELECT thread FROM asks LIMIT 0").is_ok();
+    if !has_thread {
+        c.execute_batch("ALTER TABLE asks ADD COLUMN thread INTEGER; UPDATE asks SET thread = id;")?;
+    }
+    Ok(())
+}
 
 /// A meeting (or other document) to index.
 #[derive(Clone, Debug)]
@@ -145,6 +154,8 @@ pub struct AskRow {
     pub provider: String,
     pub scope: String,
     pub created: String,
+    /// Id of the conversation's first question (follow-ups share it).
+    pub thread: i64,
 }
 
 pub struct Brain {
@@ -163,6 +174,7 @@ impl Brain {
         let conn = Connection::open(path).with_context(|| format!("could not open {}", path.display()))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Brain { conn: Mutex::new(conn) })
     }
 
@@ -469,22 +481,27 @@ impl Brain {
         Ok(hits)
     }
 
-    pub fn save_ask(&self, question: &str, answer: &str, citations: &[ask::Citation], provider: &str, scope: &str) -> Result<i64> {
+    /// Save a question and its answer. `thread`: the conversation it follows up, or None to start one.
+    pub fn save_ask(&self, question: &str, answer: &str, citations: &[ask::Citation], provider: &str, scope: &str, thread: Option<i64>) -> Result<i64> {
         let c = self.conn.lock().unwrap();
         c.execute(
-            "INSERT INTO asks (question, answer, citations, provider, scope, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![question, answer, serde_json::to_string(citations)?, provider, scope, now()],
+            "INSERT INTO asks (question, answer, citations, provider, scope, created, thread) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![question, answer, serde_json::to_string(citations)?, provider, scope, now(), thread],
         )?;
         let id = c.last_insert_rowid();
-        // Keep the last 50 questions.
-        c.execute("DELETE FROM asks WHERE id NOT IN (SELECT id FROM asks ORDER BY id DESC LIMIT 50)", [])?;
+        if thread.is_none() {
+            c.execute("UPDATE asks SET thread = id WHERE id = ?1", [id])?;
+        }
+        // Keep the last 200 questions.
+        c.execute("DELETE FROM asks WHERE id NOT IN (SELECT id FROM asks ORDER BY id DESC LIMIT 200)", [])?;
         Ok(id)
     }
 
-    pub fn asks(&self, limit: usize) -> Result<Vec<AskRow>> {
-        let c = self.conn.lock().unwrap();
-        let mut st = c.prepare("SELECT id, question, answer, citations, provider, scope, created FROM asks ORDER BY id DESC LIMIT ?1")?;
-        let rows = st.query_map([limit as i64], |r| {
+    const ASK_COLS: &'static str = "id, question, answer, citations, provider, scope, created, COALESCE(thread, id)";
+
+    fn ask_rows(c: &Connection, sql: &str, arg: i64) -> Result<Vec<AskRow>> {
+        let mut st = c.prepare(sql)?;
+        let rows = st.query_map([arg], |r| {
             Ok(AskRow {
                 id: r.get(0)?,
                 question: r.get(1)?,
@@ -493,9 +510,29 @@ impl Brain {
                 provider: r.get(4)?,
                 scope: r.get(5)?,
                 created: r.get(6)?,
+                thread: r.get(7)?,
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
+    /// The latest questions, newest first.
+    pub fn asks(&self, limit: usize) -> Result<Vec<AskRow>> {
+        let c = self.conn.lock().unwrap();
+        Self::ask_rows(&c, &format!("SELECT {} FROM asks ORDER BY id DESC LIMIT ?1", Self::ASK_COLS), limit as i64)
+    }
+
+    /// One conversation, oldest first.
+    pub fn thread(&self, thread: i64) -> Result<Vec<AskRow>> {
+        let c = self.conn.lock().unwrap();
+        Self::ask_rows(&c, &format!("SELECT {} FROM asks WHERE COALESCE(thread, id) = ?1 ORDER BY id", Self::ASK_COLS), thread)
+    }
+
+    /// Delete a whole conversation.
+    pub fn delete_thread(&self, thread: i64) -> Result<()> {
+        let c = self.conn.lock().unwrap();
+        c.execute("DELETE FROM asks WHERE COALESCE(thread, id) = ?1", [thread])?;
+        Ok(())
     }
 }
 
@@ -612,8 +649,38 @@ mod tests {
     fn asks_are_kept() {
         let b = Brain::open_in_memory().unwrap();
         let c = vec![ask::Citation { n: 1, meeting_id: "m".into(), title: "T".into(), start_s: 5.0, speaker: None }];
-        b.save_ask("q?", "a [#1]", &c, "Local", "").unwrap();
+        let first = b.save_ask("q?", "a [#1]", &c, "Local", "", None).unwrap();
         let a = b.asks(10).unwrap();
         assert_eq!(a[0].citations, c);
+        assert_eq!(a[0].thread, first);
+        // A follow-up joins the conversation; a new question starts its own.
+        b.save_ask("and then?", "b", &[], "Local", "", Some(first)).unwrap();
+        let other = b.save_ask("other?", "c", &[], "Local", "", None).unwrap();
+        let t = b.thread(first).unwrap();
+        assert_eq!(t.iter().map(|r| r.question.as_str()).collect::<Vec<_>>(), vec!["q?", "and then?"]);
+        assert_eq!(b.thread(other).unwrap().len(), 1);
+        b.delete_thread(first).unwrap();
+        assert_eq!(b.asks(10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn old_asks_table_gets_threads() {
+        let dir = std::env::temp_dir().join(format!("mahdar-brain-mig-{}", std::process::id()));
+        let path = dir.join("brain.db");
+        std::fs::create_dir_all(&dir).unwrap();
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE asks (id INTEGER PRIMARY KEY, question TEXT NOT NULL, answer TEXT NOT NULL, citations TEXT NOT NULL, \
+                 provider TEXT NOT NULL, scope TEXT NOT NULL DEFAULT '', created TEXT NOT NULL); \
+                 INSERT INTO asks (question, answer, citations, provider, created) VALUES ('q', 'a', '[]', 'p', 'now');",
+            )
+            .unwrap();
+        }
+        let b = Brain::open(&path).unwrap();
+        let a = b.asks(5).unwrap();
+        assert_eq!(a[0].thread, a[0].id);
+        drop(b);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

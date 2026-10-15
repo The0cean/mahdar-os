@@ -930,7 +930,7 @@ pub(crate) fn do_ask(app: &AppHandle, id: &str, question: &str) -> CmdResult<Cha
             return Err("this meeting has no transcript yet".to_string());
         }
         let history: Vec<(String, String)> =
-            m.chat.iter().rev().take(6).rev().map(|c| (c.role.clone(), c.text.clone())).collect();
+            m.chat.iter().rev().take(10).rev().map(|c| (c.role.clone(), c.text.clone())).collect();
         let prompt = summarize::build_question(&m.title, &m.transcript_text(), &settings.glossary, &history, question.trim());
         let what = format!("question about \u{201c}{}\u{201d}", m.title);
         let (text, provider) = write_with_provider(&app, &id, &what, &prompt, true)?;
@@ -1102,6 +1102,8 @@ pub fn run() {
             brain::brain_entity,
             brain::brain_ask,
             brain::brain_asks,
+            brain::brain_thread,
+            brain::brain_delete_thread,
             open_log_folder,
             open_data_folder,
             update::update_status,
