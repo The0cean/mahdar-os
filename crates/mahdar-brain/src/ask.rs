@@ -20,20 +20,50 @@ pub fn rrf(lists: &[Vec<i64>], k: f64) -> Vec<(i64, f64)> {
     out
 }
 
-/// The question with numbered excerpts. Only these excerpts are sent, never whole transcripts.
-pub fn prompt(question: &str, hits: &[Hit]) -> String {
+/// The question with numbered excerpts and the conversation so far (question, answer), oldest
+/// first. Only these excerpts are sent, never whole transcripts.
+pub fn prompt(question: &str, hits: &[Hit], history: &[(String, String)]) -> String {
     let mut ex = String::new();
     for (i, h) in hits.iter().enumerate() {
         let date = h.created.get(..10).unwrap_or("");
         ex.push_str(&format!("[#{}] {} ({}) at {}: {}\n\n", i + 1, h.title, date, crate::text::fmt_ts(h.start_s), h.text));
     }
+    let mut prior = String::new();
+    for (q, a) in history {
+        // Earlier answers cited other excerpt numbers; drop them so they can't be confused with these.
+        prior.push_str(&format!("User: {q}\n\nYou: {}\n\n", strip_cites(a)));
+    }
+    let prior = if prior.is_empty() { String::new() } else { format!("<conversation>\n{prior}</conversation>\n\n") };
     format!(
-        "Answer the question using only these excerpts from the user's meeting transcripts (speech recognition, Arabic and English; \
-         English terms are often written in Arabic script). Cite every statement with the excerpt numbers in square brackets, \
-         like [#3] or [#3][#7]. When excerpts from different meetings differ, say which meeting said what, oldest first. \
-         If the excerpts don't answer the question, say so plainly. Answer in the language of the question. Be concise.\n\n\
-         <excerpts>\n{ex}</excerpts>\n\nQuestion: {question}"
+        "You are helping the user think through their meetings. Your facts come from these excerpts from the user's meeting \
+         transcripts (speech recognition, Arabic and English; English terms are often written in Arabic script). Cite every \
+         statement about what was said with the excerpt numbers in square brackets, like [#3] or [#3][#7]. When excerpts from \
+         different meetings differ, say which meeting said what, oldest first. When the user asks what you think, or for advice, \
+         suggestions, risks or next steps, give your own view: direct and practical, based on the excerpts and the conversation, \
+         and kept clearly apart from what was actually said. Never invent facts, names, numbers or decisions; if the excerpts \
+         don't contain something the question needs, say so plainly. This may be a follow-up: read it in the light of the \
+         conversation so far. Answer in the language of the question. Be concise unless asked for detail.\n\n\
+         <excerpts>\n{ex}</excerpts>\n\n{prior}Question: {question}"
     )
+}
+
+/// Remove "[#n]" citation markers.
+pub fn strip_cites(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(i) = rest.find("[#") {
+        out.push_str(&rest[..i]);
+        let after = &rest[i + 2..];
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        if digits > 0 && after[digits..].starts_with(']') {
+            rest = &after[digits + 1..];
+        } else {
+            out.push_str("[#");
+            rest = after;
+        }
+    }
+    out.push_str(rest);
+    out.replace("  ", " ").replace(" .", ".")
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -120,8 +150,12 @@ mod tests {
 
     #[test]
     fn prompt_numbers_excerpts() {
-        let p = prompt("who?", &[hit("a", 75.0)]);
+        let p = prompt("who?", &[hit("a", 75.0)], &[]);
         assert!(p.contains("[#1] Meeting a (2026-10-01) at 01:15: x"));
         assert!(p.ends_with("Question: who?"));
+        assert!(!p.contains("<conversation>"));
+        let f = prompt("what do you think?", &[hit("a", 75.0)], &[("who?".into(), "Speaker 2 [#4][#1]. Next [#x].".into())]);
+        assert!(f.contains("User: who?\n\nYou: Speaker 2. Next [#x].\n\n</conversation>"), "{f}");
+        assert!(f.ends_with("Question: what do you think?"));
     }
 }
