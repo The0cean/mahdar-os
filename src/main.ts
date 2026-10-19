@@ -23,8 +23,9 @@ interface Output { id: string; template_id: string; template_name: string; provi
 interface Meeting {
   id: string; title: string; created: string; source: string; duration_s: number; language: string;
   status: Status; error: string | null; transcribe_secs: number | null; chunks: Chunk[]; outputs: Output[];
-  speakers: Record<string, string>; chat: ChatMsg[]; notes: string;
+  speakers: Record<string, string>; chat: ChatMsg[]; notes: string; gaps?: Gap[];
 }
+interface Gap { at_s: number; missing_s: number }
 interface MeetingSummary { id: string; title: string; created: string; duration_s: number; status: Status; n_outputs: number }
 interface Template { id: string; name: string; prompt: string; builtin: boolean }
 type Provider =
@@ -585,11 +586,12 @@ async function startRecording() {
   $("rec-overlay").classList.remove("hidden");
   $("rec-notes").focus();
   recTimer = window.setInterval(async () => {
-    const r = await invoke<[number, number] | null>("recording_level");
+    const r = await invoke<{ level: number; seconds: number; gaps: Gap[] } | null>("recording_level");
     if (!r) return;
-    recElapsed = r[1];
-    $("rec-time").textContent = ts(r[1]);
-    $("rec-level").style.width = `${Math.min(100, Math.sqrt(r[0]) * 100)}%`;
+    recElapsed = r.seconds;
+    $("rec-time").textContent = ts(r.seconds);
+    $("rec-level").style.width = `${Math.min(100, Math.sqrt(r.level) * 100)}%`;
+    $("rec-gaps").innerHTML = r.gaps.map((g) => `⚠ ${gapText(g)} at ${ts(g.at_s)}. Recording continued.`).join("<br>");
   }, 120);
 }
 /** Recording notes go to disk as you type, so a crash doesn't lose them. */
@@ -600,8 +602,11 @@ function saveRecNotesSoon() {
     if (recId) invoke("save_notes", { id: recId, notes: $<HTMLTextAreaElement>("rec-notes").value }).catch(() => { /* saved again on stop */ });
   }, 1500);
 }
+const gapText = (g: Gap) => `${g.missing_s >= 60 ? `${Math.round(g.missing_s / 60)} min` : `${Math.round(g.missing_s)} s`} not recorded (laptop asleep or microphone lost)`;
+
 async function stopRecording() {
   clearInterval(recTimer);
+  $("rec-gaps").innerHTML = "";
   clearTimeout(recNotesTimer);
   recId = "";
   $("rec-overlay").classList.add("hidden");
@@ -706,7 +711,9 @@ function renderTranscript() {
       const spk = !hasSpk ? "" : same ? `<span></span>` : c.speaker
         ? `<button class="spk s${c.speaker}" data-i="${i}" title="Name this speaker or reassign the line">${esc(spkName(m, c.speaker))}</button>`
         : `<button class="spk none" data-i="${i}">—</button>`;
-      return `<div class="line${c.flag ? " flagged" : ""}${busy ? " busy" : ""}${c.edited ? " edited" : ""}" data-i="${i}"><button class="stamp" data-t="${c.start_s}">${ts(c.start_s)}</button>${spk}<p dir="auto" title="Double-click to edit">${text}</p>${redo}</div>`;
+      const gaps = q ? "" : (m.gaps ?? []).filter((g) => g.at_s >= c.start_s && g.at_s < c.end_s)
+        .map((g) => `<div class="gap-line" title="Nothing was captured here; the audio continues right after">⚠ ${ts(g.at_s)} · ${gapText(g)}</div>`).join("");
+      return `${gaps}<div class="line${c.flag ? " flagged" : ""}${busy ? " busy" : ""}${c.edited ? " edited" : ""}" data-i="${i}"><button class="stamp" data-t="${c.start_s}">${ts(c.start_s)}</button>${spk}<p dir="auto" title="Double-click to edit">${text}</p>${redo}</div>`;
     })
     .join("");
   box.innerHTML = html || `<div class="t-empty">// no matches</div>`;

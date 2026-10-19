@@ -7,6 +7,8 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
+
+pub use crate::store::Gap;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 pub const SAMPLE_RATE: usize = 16_000;
@@ -211,109 +213,226 @@ pub fn spool_seconds(path: &Path) -> f64 {
     hound::WavReader::open(path).map(|r| r.duration() as f64 / r.spec().sample_rate.max(1) as f64).unwrap_or(0.0)
 }
 
-/// Microphone recorder. Runs the cpal stream on its own thread (cpal streams
-/// are not Send on Windows) and writes the audio to a spool file as it arrives.
+/// A pause in capture shorter than this is jitter, not a gap.
+const GAP_MIN_S: f64 = 2.0;
+/// Reopen the microphone after this long without audio (or at once when it reports an error).
+const REOPEN_AFTER_S: f64 = 3.0;
+
+/// Finds gaps in a recording: stretches of wall-clock time with no audio from the microphone,
+/// e.g. while the laptop slept or after the microphone was lost.
+#[derive(Default)]
+struct GapTracker {
+    /// (position in the recording where audio stopped, seconds missing so far)
+    stall: Option<(f64, f64)>,
+}
+
+#[derive(Debug, PartialEq)]
+enum Tick {
+    Ok,
+    /// Audio flowing again after a real gap.
+    Gap(Gap),
+    /// No audio for a while: the microphone should be reopened.
+    Stalled,
+}
+
+impl GapTracker {
+    /// One check: `wall_s` of real time passed and `got_s` of audio arrived; the recording is
+    /// now `position_s` long. `failed`: the microphone reported an error.
+    fn tick(&mut self, wall_s: f64, got_s: f64, position_s: f64, failed: bool) -> Tick {
+        if !failed && got_s >= wall_s * 0.5 {
+            return match self.stall.take() {
+                Some((at_s, missing_s)) if missing_s >= GAP_MIN_S => Tick::Gap(Gap { at_s, missing_s }),
+                _ => Tick::Ok,
+            };
+        }
+        let stall = self.stall.get_or_insert((position_s, 0.0));
+        stall.1 += (wall_s - got_s).max(0.0);
+        if failed || stall.1 >= REOPEN_AFTER_S {
+            Tick::Stalled
+        } else {
+            Tick::Ok
+        }
+    }
+}
+
+/// Keeps Windows from sleeping on its own while held (closing the lid still follows the power settings).
+struct StayAwake;
+
+impl StayAwake {
+    fn new() -> Self {
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED};
+            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED);
+        }
+        StayAwake
+    }
+}
+
+impl Drop for StayAwake {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        unsafe {
+            use windows_sys::Win32::System::Power::{SetThreadExecutionState, ES_CONTINUOUS};
+            SetThreadExecutionState(ES_CONTINUOUS);
+        }
+    }
+}
+
+/// What the microphone callbacks share with the recorder thread.
+#[derive(Clone)]
+struct Capture {
+    buf: Arc<Mutex<Vec<f32>>>,
+    level: Arc<Mutex<f32>>,
+    failed: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Open the default microphone, feeding mono samples into `cap.buf`. Returns the stream and its rate.
+fn open_mic(cap: &Capture) -> Result<(cpal::Stream, u32)> {
+    let device = cpal::default_host()
+        .default_input_device()
+        .ok_or_else(|| anyhow!("no microphone found"))?;
+    let config = device.default_input_config()?;
+    let rate = config.sample_rate().0;
+    let channels = config.channels() as usize;
+    let (buf, level, failed) = (cap.buf.clone(), cap.level.clone(), cap.failed.clone());
+    let push = move |mono: &mut dyn Iterator<Item = f32>| {
+        let mut b = buf.lock().unwrap();
+        let before = b.len();
+        b.extend(mono);
+        let new = &b[before..];
+        if !new.is_empty() {
+            *level.lock().unwrap() = new.iter().fold(0f32, |m, s| m.max(s.abs()));
+        }
+    };
+    let err_fn = move |e| {
+        crate::log::warn("record", format!("microphone error: {e}"));
+        failed.store(true, std::sync::atomic::Ordering::Relaxed);
+    };
+    let stream = match config.sample_format() {
+        cpal::SampleFormat::F32 => device.build_input_stream(
+            &config.into(),
+            move |d: &[f32], _: &_| push(&mut d.chunks(channels).map(|f| f.iter().sum::<f32>() / channels as f32)),
+            err_fn,
+            None,
+        )?,
+        cpal::SampleFormat::I16 => device.build_input_stream(
+            &config.into(),
+            move |d: &[i16], _: &_| {
+                push(&mut d.chunks(channels).map(|f| f.iter().map(|&s| s as f32 / i16::MAX as f32).sum::<f32>() / channels as f32))
+            },
+            err_fn,
+            None,
+        )?,
+        other => bail!("unsupported microphone sample format {other:?}"),
+    };
+    stream.play()?;
+    Ok((stream, rate))
+}
+
+/// Microphone recorder. Runs the cpal stream on its own thread (cpal streams are not Send on
+/// Windows) and writes the audio to a spool file as it arrives. While recording it keeps Windows
+/// awake, reopens the microphone if it stops delivering audio (e.g. after sleep), and reports
+/// the gaps that leaves.
 pub struct Recorder {
     stop_tx: mpsc::Sender<()>,
     thread: std::thread::JoinHandle<Result<()>>,
     level: Arc<Mutex<f32>>,
-    /// Samples captured so far, and the microphone's rate: the recording's length.
-    frames: Arc<std::sync::atomic::AtomicU64>,
-    rate: Arc<std::sync::atomic::AtomicU32>,
+    /// Seconds of audio in the spool, as f64 bits.
+    seconds: Arc<std::sync::atomic::AtomicU64>,
+    gaps: Arc<Mutex<Vec<Gap>>>,
 }
 
 impl Recorder {
-    /// Start recording into `spool` (see [`read_spool`]).
-    pub fn start(spool: &Path) -> Result<Self> {
+    /// Start recording into `spool` (see [`read_spool`]). `on_gap` is called from the recorder
+    /// thread when audio resumes after a gap.
+    pub fn start(spool: &Path, on_gap: impl Fn(&Gap) + Send + 'static) -> Result<Self> {
         use std::sync::atomic::Ordering::Relaxed;
         let (stop_tx, stop_rx) = mpsc::channel::<()>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
-        let level = Arc::new(Mutex::new(0f32));
-        let level_cb = level.clone();
-        let frames = Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let frames_cb = frames.clone();
-        let rate_out = Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let rate_set = rate_out.clone();
+        let cap = Capture { buf: Default::default(), level: Default::default(), failed: Default::default() };
+        let level = cap.level.clone();
+        let seconds = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let seconds_w = seconds.clone();
+        let gaps = Arc::new(Mutex::new(Vec::new()));
+        let gaps_w = gaps.clone();
         let spool = spool.to_path_buf();
 
         let thread = std::thread::spawn(move || -> Result<()> {
-            let setup = || -> Result<(cpal::Stream, Arc<Mutex<Vec<f32>>>, Spool)> {
-                let device = cpal::default_host()
-                    .default_input_device()
-                    .ok_or_else(|| anyhow!("no microphone found"))?;
-                let config = device.default_input_config()?;
-                let rate = config.sample_rate().0;
-                let channels = config.channels() as usize;
-                let file = Spool::create(&spool, rate)?;
-                rate_set.store(rate, Relaxed);
-                let buf = Arc::new(Mutex::new(Vec::<f32>::new()));
-                let buf_cb = buf.clone();
-                let err_fn = |e| eprintln!("mic stream error: {e}");
-                let push = move |mono: &mut dyn Iterator<Item = f32>| {
-                    let mut b = buf_cb.lock().unwrap();
-                    let before = b.len();
-                    b.extend(mono);
-                    let new = &b[before..];
-                    if !new.is_empty() {
-                        frames_cb.fetch_add(new.len() as u64, Relaxed);
-                        let peak = new.iter().fold(0f32, |m, s| m.max(s.abs()));
-                        *level_cb.lock().unwrap() = peak;
-                    }
-                };
-                let stream = match config.sample_format() {
-                    cpal::SampleFormat::F32 => device.build_input_stream(
-                        &config.into(),
-                        move |d: &[f32], _: &_| {
-                            push(&mut d.chunks(channels).map(|f| f.iter().sum::<f32>() / channels as f32))
-                        },
-                        err_fn,
-                        None,
-                    )?,
-                    cpal::SampleFormat::I16 => device.build_input_stream(
-                        &config.into(),
-                        move |d: &[i16], _: &_| {
-                            push(&mut d.chunks(channels).map(|f| {
-                                f.iter().map(|&s| s as f32 / i16::MAX as f32).sum::<f32>() / channels as f32
-                            }))
-                        },
-                        err_fn,
-                        None,
-                    )?,
-                    other => bail!("unsupported microphone sample format {other:?}"),
-                };
-                stream.play()?;
-                Ok((stream, buf, file))
-            };
-            match setup() {
-                Ok((stream, buf, mut file)) => {
+            let opened = open_mic(&cap).and_then(|(stream, rate)| Ok((stream, rate, Spool::create(&spool, rate)?)));
+            let (stream, mut mic_rate, mut file) = match opened {
+                Ok(x) => {
                     let _ = ready_tx.send(Ok(()));
-                    // Move the captured audio to disk twice a second until told to stop.
-                    let mut stream = Some(stream);
-                    loop {
-                        let stop = !matches!(
-                            stop_rx.recv_timeout(std::time::Duration::from_millis(500)),
-                            Err(mpsc::RecvTimeoutError::Timeout)
-                        );
-                        if stop {
-                            drop(stream.take()); // ends the callbacks, so the buffer is final
-                        }
-                        let samples = std::mem::take(&mut *buf.lock().unwrap());
-                        file.push(&samples)?;
-                        if stop {
-                            return file.finish();
-                        }
-                    }
+                    x
                 }
                 Err(e) => {
                     let msg = e.to_string();
                     let _ = ready_tx.send(Err(e));
-                    Err(anyhow!(msg))
+                    return Err(anyhow!(msg));
+                }
+            };
+            let _awake = StayAwake::new();
+            let mut stream = Some(stream);
+            let mut written = 0usize;
+            let mut tracker = GapTracker::default();
+            // Wall-clock time, so time spent asleep counts.
+            let mut last = std::time::SystemTime::now();
+            let mut next_reopen = 0.0f64;
+            // Move the captured audio to disk twice a second until told to stop.
+            loop {
+                let stop = !matches!(
+                    stop_rx.recv_timeout(std::time::Duration::from_millis(500)),
+                    Err(mpsc::RecvTimeoutError::Timeout)
+                );
+                if stop {
+                    drop(stream.take()); // ends the callbacks, so the buffer is final
+                }
+                let samples = std::mem::take(&mut *cap.buf.lock().unwrap());
+                let got_s = samples.len() as f64 / mic_rate as f64;
+                let samples =
+                    if mic_rate as usize == file.rate { samples } else { resample_linear(&samples, mic_rate as usize, file.rate) };
+                file.push(&samples)?;
+                written += samples.len();
+                let position_s = written as f64 / file.rate as f64;
+                seconds_w.store(position_s.to_bits(), Relaxed);
+                if stop {
+                    return file.finish();
+                }
+
+                let now = std::time::SystemTime::now();
+                let wall_s = now.duration_since(last).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+                last = now;
+                match tracker.tick(wall_s, got_s, position_s, cap.failed.swap(false, Relaxed)) {
+                    Tick::Ok => next_reopen = 0.0,
+                    Tick::Gap(gap) => {
+                        crate::log::warn("record", format!("{} not recorded at {}", crate::store::fmt_ts(gap.missing_s), crate::store::fmt_ts(gap.at_s)));
+                        on_gap(&gap);
+                        gaps_w.lock().unwrap().push(gap);
+                        next_reopen = 0.0;
+                    }
+                    Tick::Stalled => {
+                        // Retry every 2 s until a microphone answers; audio resumes into the same file.
+                        let stalled_s = tracker.stall.map(|s| s.1).unwrap_or(0.0);
+                        if stalled_s >= next_reopen {
+                            next_reopen = stalled_s + 2.0;
+                            drop(stream.take());
+                            cap.buf.lock().unwrap().clear();
+                            match open_mic(&cap) {
+                                Ok((s, rate)) => {
+                                    crate::log::info("record", format!("microphone reopened after {stalled_s:.0} s without audio"));
+                                    stream = Some(s);
+                                    mic_rate = rate;
+                                }
+                                Err(e) => crate::log::warn("record", format!("microphone not back yet: {e:#}")),
+                            }
+                        }
+                    }
                 }
             }
         });
 
         ready_rx.recv().map_err(|_| anyhow!("recorder thread died"))??;
-        Ok(Recorder { stop_tx, thread, level, frames, rate: rate_out })
+        Ok(Recorder { stop_tx, thread, level, seconds, gaps })
     }
 
     /// Latest peak level 0..1, for a live meter.
@@ -321,10 +440,14 @@ impl Recorder {
         *self.level.lock().unwrap()
     }
 
-    /// Length of the recording so far, in seconds of audio.
+    /// Length of the recording so far, in seconds of audio (gaps not included).
     pub fn seconds(&self) -> f64 {
-        use std::sync::atomic::Ordering::Relaxed;
-        self.frames.load(Relaxed) as f64 / self.rate.load(Relaxed).max(1) as f64
+        f64::from_bits(self.seconds.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    /// Gaps so far: where audio stopped, and for how long.
+    pub fn gaps(&self) -> Vec<Gap> {
+        self.gaps.lock().unwrap().clone()
     }
 
     /// Stop and close the spool file.
@@ -378,6 +501,27 @@ mod tests {
         assert_eq!(pcm.len(), 3 * SAMPLE_RATE);
         assert!((pcm[100] - 0.25).abs() < 1e-3);
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn gaps_are_found_after_sleep_and_mic_loss() {
+        let mut t = GapTracker::default();
+        // Normal capture, with jitter.
+        assert_eq!(t.tick(0.5, 0.5, 10.0, false), Tick::Ok);
+        assert_eq!(t.tick(0.5, 0.2, 10.2, false), Tick::Ok);
+        assert_eq!(t.tick(0.5, 0.8, 11.0, false), Tick::Ok);
+        // Laptop asleep for 3 minutes: one long tick with no audio, then audio again.
+        assert_eq!(t.tick(180.0, 0.1, 11.1, false), Tick::Stalled);
+        assert_eq!(t.tick(0.5, 0.5, 11.6, false), Tick::Gap(Gap { at_s: 11.1, missing_s: 179.9 }));
+        // Microphone goes quiet: reopen after 3 s, gap reported once audio is back.
+        for i in 0..5 {
+            assert_eq!(t.tick(0.5, 0.0, 20.0, false), Tick::Ok, "tick {i}");
+        }
+        assert_eq!(t.tick(0.5, 0.0, 20.0, false), Tick::Stalled);
+        assert_eq!(t.tick(0.5, 0.5, 20.5, false), Tick::Gap(Gap { at_s: 20.0, missing_s: 3.0 }));
+        // An error reopens at once; a short hiccup is not a gap.
+        assert_eq!(t.tick(0.5, 0.4, 30.0, true), Tick::Stalled);
+        assert_eq!(t.tick(0.5, 0.5, 30.5, false), Tick::Ok);
     }
 
     #[test]
