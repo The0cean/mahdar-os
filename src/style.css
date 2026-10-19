@@ -382,3 +382,6 @@ mark { background: var(--accent); color: #fff; padding: 0 2px; }
 .n-pline.at { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 .n-pline b { font-weight: 600; color: var(--text3); }
 #rec-notes { resize: vertical; font-family: var(--mono); font-size: 12px; line-height: 1.6; unicode-bidi: plaintext; }
+.gap-line { font-family: var(--mono); font-size: 11px; color: var(--orange); padding: 8px 20px; border-bottom: 1px dashed var(--orange); background: color-mix(in srgb, var(--orange) 8%, var(--bg)); }
+#rec-gaps:empty { display: none; }
+#rec-gaps { margin: 0 0 12px; }

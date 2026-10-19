@@ -508,6 +508,7 @@ fn new_meeting(state: &AppState, title: String, source: String) -> CmdResult<Mee
         speakers: Default::default(),
         chat: Vec::new(),
         notes: String::new(),
+        gaps: Vec::new(),
     };
     state.store.save_meeting(&m).map_err(err)?;
     Ok(m)
@@ -1026,7 +1027,7 @@ async fn fill_note(app: AppHandle, id: String, at: f64, note: String) -> CmdResu
 
 /// Start recording into a new meeting, written to disk as it goes. Returns the meeting id.
 #[tauri::command]
-fn start_recording(state: State<AppState>, title: Option<String>) -> CmdResult<String> {
+fn start_recording(app: AppHandle, state: State<AppState>, title: Option<String>) -> CmdResult<String> {
     let mut rec = state.recorder.lock().unwrap();
     if rec.is_some() {
         return Err("already recording".into());
@@ -1034,7 +1035,16 @@ fn start_recording(state: State<AppState>, title: Option<String>) -> CmdResult<S
     let mut m = new_meeting(&state, recording_title(title), "microphone".into())?;
     m.status = Status::Recording;
     state.store.save_meeting(&m).map_err(err)?;
-    match Recorder::start(&state.store.recording_path(&m.id)) {
+    // Gaps (laptop asleep, microphone lost) go into the meeting as they happen, so a crash keeps them too.
+    let (h, gid) = (app.clone(), m.id.clone());
+    let on_gap = move |g: &audio::Gap| {
+        let store = &h.state::<AppState>().store;
+        if let Ok(mut m) = store.load_meeting(&gid) {
+            m.gaps.push(g.clone());
+            let _ = store.save_meeting(&m);
+        }
+    };
+    match Recorder::start(&state.store.recording_path(&m.id), on_gap) {
         Ok(r) => {
             log::info("record", format!("recording \u{201c}{}\u{201d}", m.title));
             *rec = Some((r, m.id.clone()));
@@ -1054,10 +1064,18 @@ fn recording_title(title: Option<String>) -> String {
         .unwrap_or_else(|| format!("Recording {}", Local::now().format("%d %b %Y %H:%M")))
 }
 
-/// (peak level, seconds recorded) while recording.
+#[derive(Serialize)]
+struct RecordingLevel {
+    /// Peak level 0..1.
+    level: f32,
+    /// Seconds of audio recorded (gaps not included).
+    seconds: f64,
+    gaps: Vec<audio::Gap>,
+}
+
 #[tauri::command]
-fn recording_level(state: State<AppState>) -> Option<(f32, f64)> {
-    state.recorder.lock().unwrap().as_ref().map(|(r, _)| (r.level(), r.seconds()))
+fn recording_level(state: State<AppState>) -> Option<RecordingLevel> {
+    state.recorder.lock().unwrap().as_ref().map(|(r, _)| RecordingLevel { level: r.level(), seconds: r.seconds(), gaps: r.gaps() })
 }
 
 #[tauri::command]
