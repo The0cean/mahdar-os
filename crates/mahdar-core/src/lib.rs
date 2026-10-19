@@ -4,6 +4,7 @@ pub mod asr;
 pub mod audio;
 pub mod export;
 pub mod log;
+pub mod notes;
 pub mod secrets;
 pub mod store;
 pub mod summarize;

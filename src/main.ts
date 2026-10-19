@@ -23,7 +23,7 @@ interface Output { id: string; template_id: string; template_name: string; provi
 interface Meeting {
   id: string; title: string; created: string; source: string; duration_s: number; language: string;
   status: Status; error: string | null; transcribe_secs: number | null; chunks: Chunk[]; outputs: Output[];
-  speakers: Record<string, string>; chat: ChatMsg[];
+  speakers: Record<string, string>; chat: ChatMsg[]; notes: string;
 }
 interface MeetingSummary { id: string; title: string; created: string; duration_s: number; status: Status; n_outputs: number }
 interface Template { id: string; name: string; prompt: string; builtin: boolean }
@@ -134,7 +134,7 @@ let settings: Settings;
 let status: EngineStatus;
 let activeOutputId: string | null = null;
 let follow = store.get("follow") === "1";
-let mode: "outputs" | "ask" = "outputs";
+let mode: "outputs" | "ask" | "notes" = "outputs";
 const asking = new Set<string>(); // meeting ids with a question in flight
 const spkName = (m: Meeting, n: number) => m.speakers[String(n)] || `Speaker ${n}`;
 const progress = new Map<string, Progress>();
@@ -573,13 +573,17 @@ async function startDownload(ev: Event) {
 
 // ───────── recording ─────────
 let recTimer = 0;
+let recElapsed = 0;
 async function startRecording() {
   try { await invoke("start_recording"); } catch (e) { return toast(String(e), true); }
   $<HTMLInputElement>("rec-title").value = $<HTMLInputElement>("rec-title-quick").value;
+  recElapsed = 0;
   $("rec-overlay").classList.remove("hidden");
+  $("rec-notes").focus();
   recTimer = window.setInterval(async () => {
     const r = await invoke<[number, number] | null>("recording_level");
     if (!r) return;
+    recElapsed = r[1];
     $("rec-time").textContent = ts(r[1]);
     $("rec-level").style.width = `${Math.min(100, Math.sqrt(r[0]) * 100)}%`;
   }, 120);
@@ -588,8 +592,10 @@ async function stopRecording() {
   clearInterval(recTimer);
   $("rec-overlay").classList.add("hidden");
   try {
-    const id = await invoke<string>("stop_recording", { title: $<HTMLInputElement>("rec-title").value });
+    const notes = $<HTMLTextAreaElement>("rec-notes");
+    const id = await invoke<string>("stop_recording", { title: $<HTMLInputElement>("rec-title").value, notes: notes.value });
     $<HTMLInputElement>("rec-title-quick").value = "";
+    notes.value = "";
     await openMeeting(id);
   } catch (e) { toast(String(e), true); }
 }
@@ -599,7 +605,9 @@ const audio = () => $<HTMLAudioElement>("audio");
 
 async function openMeeting(id: string) {
   const switching = current?.id !== id;
+  if (switching) await flushNotes();
   current = await invoke<Meeting>("get_meeting", { id });
+  if (!switching && notesTimer) current.notes = $<HTMLTextAreaElement>("notes-input").value; // typing not saved yet
   if (switching) {
     activeOutputId = current.outputs[0]?.id ?? null;
     $<HTMLInputElement>("t-search").value = "";
@@ -653,6 +661,7 @@ function renderMeeting() {
   renderTimeline();
   renderResults();
   renderChat();
+  renderNotes();
 }
 
 function renderTranscript() {
@@ -717,6 +726,7 @@ function renderControls() {
       : p.kind === "claude_api"
         ? "// cloud: the transcript is sent to Anthropic with your API key (billed to your credits; see // 04 Monitor)"
         : "// cloud: the transcript is sent to Anthropic via your Claude Code login";
+  if (m.notes.trim()) note.innerHTML += "<br>// your notes are included";
 }
 
 function renderTimeline() {
@@ -798,6 +808,7 @@ async function generate() {
   const m = current!;
   const templateId = $<HTMLSelectElement>("o-template").value;
   const t = templates.find((x) => x.id === templateId)!;
+  await flushNotes();
   generating.set(m.id, t.name);
   renderControls();
   renderTimeline();
@@ -956,14 +967,19 @@ function initSplit() {
 }
 
 // ───────── ask ─────────
-function setMode(next: "outputs" | "ask") {
+function setMode(next: typeof mode) {
   mode = next;
   document.querySelectorAll<HTMLElement>("#mode-row .fmt-opt").forEach((o) => o.classList.toggle("active", o.dataset.mode === mode));
   $("ask-panel").classList.toggle("hidden", mode !== "ask");
+  $("notes-panel").classList.toggle("hidden", mode !== "notes");
   $("timeline-panel").classList.toggle("hidden", mode !== "outputs");
   $("gen-controls").classList.toggle("hidden", mode !== "outputs");
-  document.querySelectorAll<HTMLElement>(".extract-controls .field").forEach((f, i) => f.classList.toggle("hidden", mode === "ask" && i === 1));
+  // Notes keep only the engine row (it writes the fill-ins); Ask also keeps the title.
+  document.querySelectorAll<HTMLElement>(".extract-controls > .field").forEach((f, i) => f.classList.toggle("hidden", (mode === "ask" && i === 1) || (mode === "notes" && i <= 1)));
+  $("o-note").classList.toggle("hidden", mode === "notes");
   if (mode === "ask") { renderChat(); $("ask-input").focus(); }
+  if (mode === "notes") renderNotes();
+  if (mode === "outputs" && current) renderControls();
 }
 
 function linkTimestamps(html: string) {
@@ -997,6 +1013,7 @@ async function ask() {
   const input = $<HTMLTextAreaElement>("ask-input");
   const question = input.value.trim();
   if (!m || !question || asking.has(m.id)) return;
+  await flushNotes();
   asking.add(m.id);
   m.chat.push({ role: "user", text: question, created: new Date().toISOString(), provider: "" });
   input.value = "";
@@ -1014,6 +1031,179 @@ async function ask() {
       renderChat();
     }
   }
+}
+
+
+// ───────── notes ─────────
+let notesTimer = 0;
+const peekOpen = new Map<string, boolean>(); // note line → transcript preview shown (default: open for gaps)
+const filling = new Set<string>(); // `${meetingId}\n${line}` being filled in
+const PEEK_S = 90;
+
+/** Arabic-Indic digits → ASCII, so "دقيقة ٨" reads as minute 8. */
+const asciiDigits = (s: string) => s.replace(/[٠-٩۰-۹]/g, (d) => String(d.charCodeAt(0) & 0xf));
+const hms = (a: string, b?: string, c?: string) => (c !== undefined ? +a * 3600 + +b! * 60 + +c : b !== undefined ? +a * 60 + +b : +a * 60);
+
+/** The recording time a note line points to, in seconds: [08:12], @8, @8:30, ~8m, min 8, 8 min, دقيقة 8, or a time at the start. */
+function noteTime(line: string): number | null {
+  const l = asciiDigits(line);
+  let m = l.match(/\[(\d{1,2}):(\d{2})(?::(\d{2}))?\]/);
+  if (m) return hms(m[1], m[2], m[3]);
+  m = l.match(/[@~]\s*(\d{1,3})(?::(\d{2}))?(?::(\d{2}))?/);
+  if (m) return hms(m[1], m[2], m[3]);
+  m = l.match(/(?:^|[^\p{L}])(?:min(?:ute)?s?\.?|(?:ال)?دقيقة)\s*(\d{1,3})(?::(\d{2}))?/iu);
+  if (m) return hms(m[1], m[2]);
+  m = l.match(/(?:^|[^\p{L}\d:])(\d{1,3})(?::(\d{2}))?\s*(?:mins?|minutes?)(?![\p{L}])/iu);
+  if (m) return hms(m[1], m[2]);
+  m = l.match(/^\s*(?:[-*•?]\s*)*(\d{1,2}):(\d{2})(?::(\d{2}))?(?!\d)/);
+  if (m) return hms(m[1], m[2], m[3]);
+  return null;
+}
+/** A note that says something was missed or unclear. */
+const isGap = (line: string) => /[?؟]|\bmissed\b|didn'?t (?:catch|get|hear)|unclear|فاتني|فاتتني|ما سمعت|مش واضح|مو واضح/i.test(line);
+const isFill = (line: string) => line.trimStart().startsWith("↳");
+
+interface Mark { line: string; t: number; gap: boolean; answer: string }
+function noteMarks(notes: string, duration: number): Mark[] {
+  const lines = notes.split("\n");
+  const marks: Mark[] = [];
+  lines.forEach((line, i) => {
+    if (!line.trim() || isFill(line)) return;
+    const t = noteTime(line);
+    if (t === null || (duration > 0 && t > duration + 5)) return;
+    const next = lines[i + 1] ?? "";
+    marks.push({ line, t, gap: isGap(line), answer: isFill(next) ? next.trim().replace(/^↳\s*/, "") : "" });
+  });
+  return marks;
+}
+
+function renderNotes() {
+  const m = current;
+  if (!m) return;
+  $("mode-notes").textContent = m.notes.trim() ? "NOTES ●" : "NOTES";
+  if (mode !== "notes") return;
+  const box = $<HTMLTextAreaElement>("notes-input");
+  if (document.activeElement !== box && !notesTimer && box.value !== m.notes) box.value = m.notes;
+  renderMarks();
+}
+
+function renderMarks() {
+  const m = current!;
+  const marks = noteMarks($<HTMLTextAreaElement>("notes-input").value, m.duration_s);
+  const ready = m.status === "ready" && m.chunks.length > 0;
+  const html = marks.map((k, i) => {
+    const open = peekOpen.get(k.line) ?? k.gap;
+    const busy = filling.has(`${m.id}\n${k.line}`);
+    const lines = open ? m.chunks.filter((c) => c.end_s > k.t - PEEK_S && c.start_s < k.t + PEEK_S && cleanText(c.text)) : [];
+    const peek = !open ? "" : `<div class="n-peek">${lines.map((c) => `<div class="n-pline${c.start_s <= k.t && k.t < c.end_s ? " at" : ""}"><button class="stamp" data-t="${c.start_s}">${ts(c.start_s)}</button><span dir="auto">${c.speaker ? `<b>${esc(spkName(m, c.speaker))}:</b> ` : ""}${esc(cleanText(c.text))}</span></div>`).join("") || `<div class="res-empty">// nothing transcribed around ${ts(k.t)}</div>`}</div>`;
+    return `<div class="n-mark${k.gap ? " gap" : ""}" data-i="${i}">
+      <div class="n-mark-head"><button class="n-ts" data-t="${k.t}" title="Play from here">${ts(k.t)}</button><span class="n-text" dir="auto">${esc(k.line.trim())}</span></div>
+      ${k.answer ? `<div class="n-answer md" dir="auto">↳ ${linkTimestamps(marked.parseInline(k.answer) as string)}</div>` : ""}
+      <div class="n-acts"><button class="hbtn n-peek-btn">${open ? "HIDE TRANSCRIPT" : "TRANSCRIPT"}</button><button class="hbtn${k.gap && !k.answer ? " accent" : ""} n-fill" ${ready && !busy ? "" : "disabled"}>${busy ? "FILLING IN…" : k.answer ? "FILL IN AGAIN" : "FILL IN"}</button></div>
+      ${peek}
+    </div>`;
+  }).join("");
+  const box = $("n-marks");
+  box.innerHTML = marks.length ? `<div class="section-title">Time marks · ${marks.length}</div>${html}` : "";
+  box.querySelectorAll<HTMLElement>(".stamp, .n-ts, .ts-link").forEach((b) => (b.onclick = () => seek(Number(b.dataset.t), true)));
+  box.querySelectorAll<HTMLElement>(".n-mark").forEach((el) => {
+    const k = marks[Number(el.dataset.i)];
+    el.querySelector<HTMLButtonElement>(".n-peek-btn")!.onclick = () => { peekOpen.set(k.line, !(peekOpen.get(k.line) ?? k.gap)); renderMarks(); };
+    el.querySelector<HTMLButtonElement>(".n-fill")!.onclick = () => fillNote(k);
+  });
+}
+
+function notesInput() {
+  clearTimeout(notesTimer);
+  $("n-saved").textContent = "";
+  notesTimer = window.setTimeout(flushNotes, 800);
+  renderMarks();
+}
+
+async function flushNotes() {
+  if (!notesTimer || !current) return;
+  clearTimeout(notesTimer);
+  notesTimer = 0;
+  const m = current, notes = $<HTMLTextAreaElement>("notes-input").value;
+  try {
+    await invoke("save_notes", { id: m.id, notes });
+    m.notes = notes;
+    if (current?.id === m.id) { $("n-saved").textContent = "// saved"; $("mode-notes").textContent = notes.trim() ? "NOTES ●" : "NOTES"; }
+  } catch (e) { toast(`Notes not saved: ${e}`, true); }
+}
+
+function setNotes(value: string, caret?: number) {
+  const box = $<HTMLTextAreaElement>("notes-input");
+  const typing = document.activeElement === box, [a, b] = [box.selectionStart, box.selectionEnd];
+  box.value = value;
+  if (caret !== undefined) { box.focus(); box.setSelectionRange(caret, caret); }
+  else if (typing) box.setSelectionRange(a, b);
+  notesInput();
+}
+
+/** Start a note at the player's position: a new line beginning "[mm:ss] ". */
+function stampNote(atCaret: boolean) {
+  if (!current) return;
+  if (mode !== "notes") setMode("notes");
+  const box = $<HTMLTextAreaElement>("notes-input");
+  const v = box.value;
+  const pos = atCaret && document.activeElement === box ? box.selectionStart : v.length;
+  const before = v.slice(0, pos).replace(/[ \t]+$/, "");
+  const lineStart = before === "" || before.endsWith("\n");
+  const ins = `${lineStart ? "" : "\n"}[${ts(audio().currentTime || 0)}] `;
+  setNotes(before + ins + v.slice(pos), before.length + ins.length);
+}
+
+async function fillNote(k: Mark) {
+  const m = current;
+  const key = `${m?.id}\n${k.line}`;
+  if (!m || filling.has(key)) return;
+  await flushNotes();
+  filling.add(key);
+  renderMarks();
+  try {
+    const answer = await invoke<string>("fill_note", { id: m.id, at: k.t, note: k.line.trim() });
+    const fill = `    ↳ ${answer.replace(/\s*\n+\s*/g, " ")}`;
+    // Put the answer under its note (replacing an earlier one); the notes may have changed meanwhile.
+    const base = current?.id === m.id ? $<HTMLTextAreaElement>("notes-input").value : m.notes;
+    const lines = base.split("\n");
+    const at = lines.indexOf(k.line);
+    if (at < 0) lines.push(k.line, fill);
+    else if (isFill(lines[at + 1] ?? "")) lines[at + 1] = fill;
+    else lines.splice(at + 1, 0, fill);
+    if (current?.id === m.id) setNotes(lines.join("\n"));
+    else await invoke("save_notes", { id: m.id, notes: lines.join("\n") });
+  } catch (e) {
+    toast(String(e), true);
+  } finally {
+    filling.delete(key);
+    if (current?.id === m.id && mode === "notes") renderMarks();
+  }
+}
+
+async function importNotes() {
+  if (!current) return;
+  const path = await open({ multiple: false, filters: [{ name: "Notes", extensions: ["txt", "md", "docx"] }] });
+  if (typeof path !== "string") return;
+  try {
+    const text = await invoke<string>("read_notes_file", { path });
+    if (!text) return toast("That file has no text", true);
+    const v = $<HTMLTextAreaElement>("notes-input").value.trimEnd();
+    setNotes(v ? `${v}\n\n${text}` : text);
+    toast("Notes added");
+  } catch (e) { toast(String(e), true); }
+}
+
+/** While recording, each new line of notes starts with the recording time. */
+function stampRecNotes(e: InputEvent) {
+  const box = e.target as HTMLTextAreaElement;
+  if (e.inputType !== "insertText" || !e.data || e.isComposing) return;
+  const { selectionStart: a, selectionEnd: b, value: v } = box;
+  const lineStart = v.lastIndexOf("\n", a - 1) + 1;
+  const lineEnd = v.indexOf("\n", b);
+  if (v.slice(lineStart, lineEnd < 0 ? v.length : lineEnd).trim()) return;
+  e.preventDefault();
+  box.setRangeText(`[${ts(recElapsed)}] ${e.data}`, lineStart, b, "end");
 }
 
 // ───────── player ─────────
@@ -1296,7 +1486,13 @@ async function init() {
   $("o-lang").onchange = saveProviderFromPanel;
   $("btn-generate").onclick = generate;
   $("btn-fix").onclick = () => retry(null);
-  document.querySelectorAll<HTMLElement>("#mode-row .fmt-opt").forEach((o) => (o.onclick = () => setMode(o.dataset.mode as "outputs" | "ask")));
+  document.querySelectorAll<HTMLElement>("#mode-row .fmt-opt").forEach((o) => (o.onclick = () => setMode(o.dataset.mode as typeof mode)));
+  $("notes-input").oninput = notesInput;
+  $("notes-input").onblur = flushNotes;
+  $("n-stamp").onclick = () => stampNote(true);
+  $("n-import").onclick = importNotes;
+  $("rec-notes").addEventListener("beforeinput", (e) => stampRecNotes(e as InputEvent));
+  window.addEventListener("beforeunload", () => { flushNotes(); });
   $("btn-ask").onclick = ask;
   $("ask-input").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } };
   $("btn-clear-chat").onclick = async () => {
@@ -1387,6 +1583,10 @@ async function init() {
     if (e.code === "Space" && !typing && $("v-meeting").classList.contains("active") && a.src) {
       e.preventDefault();
       a.paused ? a.play() : a.pause();
+    }
+    if (e.code === "KeyM" && !e.ctrlKey && !e.metaKey && !e.altKey && !typing && $("v-meeting").classList.contains("active") && current) {
+      e.preventDefault();
+      stampNote(false);
     }
   });
 
