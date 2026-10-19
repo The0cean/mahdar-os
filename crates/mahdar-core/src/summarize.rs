@@ -87,7 +87,28 @@ summary of what it was about and where it landed, then at most 10 bullets with t
 participants list, no section headings, no action-item table. Keep numbers and names exact."),
         t("actions", "Action items", "List only the action items and follow-ups as a checklist: \
 \"- [ ] action — owner — due date\". Use \"TBD\" where owner or date is not stated. No other text."),
+        t("enhanced", "Enhanced notes", "Turn my notes (in <my_notes>) into complete meeting notes. Keep my \
+structure, order and headings, and my wording where it is clear. Under each of my points add what the transcript \
+says about it: numbers, names, who said what, decisions, with timestamps like [12:34]. Answer the points I marked \
+as missed or unclear. Then add a short **Also discussed** section with anything important my notes leave out. \
+If there are no notes, write concise notes from the transcript instead."),
     ]
+}
+
+/// The user's notes, with how to use them. Goes after the transcript (which API engines cache).
+fn notes_block(notes: &str) -> String {
+    let n = notes.trim();
+    if n.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\nMy own notes from this meeting are below. They show what mattered to me: cover every point in them, \
+         filled out with detail from the transcript. A time in a note (like [08:12], @8, 8:30 or min 8) points to that \
+         moment in the recording; use the transcript around it. Where a note says I missed something or marks it \
+         unclear (?), fill it in from the transcript at that time. If a note disagrees with the transcript, follow the \
+         transcript and point out the difference briefly. The notes may be terse, misspelled or in another language.\n\
+         <my_notes>\n{n}\n</my_notes>"
+    )
 }
 
 fn glossary_block(glossary: &str) -> String {
@@ -133,24 +154,32 @@ pub fn provider_or_none<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::
 }
 
 /// Build the full user prompt for a template.
-pub fn build_prompt(template: &Template, output_language: &str, title: &str, transcript: &str, glossary: &str) -> String {
+pub fn build_prompt(template: &Template, output_language: &str, title: &str, transcript: &str, glossary: &str, notes: &str) -> String {
     let lang = match output_language {
         "ar" => "Write the output in Arabic (Modern Standard Arabic, business register).",
         "auto" => "Write the output in the main language of the meeting.",
         _ => "Write the output in English.",
     };
     format!(
-        "{}\n{}{}\n\nMeeting title: {}\n\n<transcript>\n{}\n</transcript>",
+        "{}\n{}{}\n\nMeeting title: {}\n\n<transcript>\n{}\n</transcript>{}",
         template.prompt,
         lang,
         glossary_block(glossary),
         title,
-        transcript
+        transcript,
+        notes_block(notes)
     )
 }
 
 /// Prompt for a question about one meeting, with recent Q&A for follow-ups.
-pub fn build_question(title: &str, transcript: &str, glossary: &str, history: &[(String, String)], question: &str) -> String {
+pub fn build_question(
+    title: &str,
+    transcript: &str,
+    glossary: &str,
+    notes: &str,
+    history: &[(String, String)],
+    question: &str,
+) -> String {
     let mut prior = String::new();
     for (role, text) in history {
         prior.push_str(&format!("{}: {}\n\n", if role == "user" { "Q" } else { "A" }, text));
@@ -160,13 +189,31 @@ pub fn build_question(title: &str, transcript: &str, glossary: &str, history: &[
          like [12:34]. If the transcript doesn't contain what the question needs, say so plainly. When asked what you think, or for \
          advice, suggestions, risks or next steps, give your own view: direct and practical, based on the transcript, and kept \
          clearly apart from what was actually said. Answer in the language of the question.{}\n\n\
-         Meeting title: {}\n\n<transcript>\n{}\n</transcript>\n\n{}{}Q: {}",
+         Meeting title: {}\n\n<transcript>\n{}\n</transcript>{}\n\n{}{}Q: {}",
         glossary_block(glossary),
         title,
         transcript,
+        notes_block(notes),
         if prior.is_empty() { "" } else { "Earlier in this conversation:\n\n" },
         prior,
         question
+    )
+}
+
+/// Prompt to fill in one note from the transcript around the time it points to.
+/// `excerpt` is the transcript from a few minutes either side of `at_s`.
+pub fn build_fill(title: &str, excerpt: &str, glossary: &str, at_s: f64, note: &str) -> String {
+    format!(
+        "During this meeting I wrote the note below at about [{}] in the recording, but I missed part of what was said. \
+         From the transcript excerpt, say what was said there that my note is about: the facts, numbers, names and who \
+         said them, with timestamps like [12:34]. Answer in one to three plain-text sentences (no Markdown), in the language of my note, with no \
+         preamble. If the excerpt doesn't cover it, say so in one sentence.{}\n\n\
+         Meeting title: {}\n\n<transcript>\n{}\n</transcript>\n\nMy note: {}",
+        crate::store::fmt_ts(at_s),
+        glossary_block(glossary),
+        title,
+        excerpt,
+        note.trim()
     )
 }
 
@@ -626,14 +673,18 @@ mod tests {
 
     #[test]
     fn caches_the_transcript_only_for_questions() {
-        let q = build_question("T", "line", "", &[], "who?");
+        let q = build_question("T", "line", "", "@8 price?", &[], "who?");
         let c = api_content(&q, true);
         assert_eq!(c.as_array().unwrap().len(), 2);
         assert!(c[0]["text"].as_str().unwrap().ends_with("</transcript>"));
         assert!(c[0]["cache_control"].is_object());
         assert!(c[1]["text"].as_str().unwrap().contains("Q: who?"));
-        let p = build_prompt(&builtin_templates()[0], "en", "T", "line", "");
+        assert!(c[1]["text"].as_str().unwrap().contains("<my_notes>\n@8 price?\n</my_notes>"));
+        let p = build_prompt(&builtin_templates()[0], "en", "T", "line", "", "");
         assert!(api_content(&p, false)[0]["cache_control"].is_null());
+        assert!(!p.contains("my_notes"));
+        let p = build_prompt(&builtin_templates()[0], "en", "T", "line", "", " \n ");
+        assert!(!p.contains("my_notes"));
     }
 
     /// Hits the real API with a made-up key: checks the URL, headers and 401 handling.
@@ -659,7 +710,7 @@ mod tests {
     fn live_generate_question() {
         let t = "[00:00] Speaker 1: We approve the plan.
 [00:12] Speaker 2: I'll send the report by Thursday.";
-        let q = build_question("Demo", t, "", &[], "Who sends the report, and when?");
+        let q = build_question("Demo", t, "", "", &[], "Who sends the report, and when?");
         let r = generate(&Provider::ClaudeApi { model: "claude-haiku-5-5".into(), effort: "high".into() }, &q, true, &LocalOptions::default()).unwrap();
         println!("answer: {}
 cost: ${:.5} · {}", r.text, r.cost_usd.unwrap(), r.usage);

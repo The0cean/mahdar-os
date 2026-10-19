@@ -77,6 +77,9 @@ pub struct Meeting {
     pub speakers: BTreeMap<u32, String>,
     #[serde(default)]
     pub chat: Vec<ChatMsg>,
+    /// The user's own notes, typed in Mahdar or imported. "[mm:ss]" marks a time in the recording.
+    #[serde(default)]
+    pub notes: String,
 }
 
 impl Meeting {
@@ -86,8 +89,14 @@ impl Meeting {
 
     /// Transcript for the minutes writer: "[mm:ss] Speaker: text" per line.
     pub fn transcript_text(&self) -> String {
+        self.transcript_between(0.0, f64::INFINITY)
+    }
+
+    /// Transcript lines that overlap `from_s..to_s`, in the same format.
+    pub fn transcript_between(&self, from_s: f64, to_s: f64) -> String {
         self.chunks
             .iter()
+            .filter(|c| c.end_s > from_s && c.start_s < to_s)
             .map(|c| (c, crate::asr::clean_text(&c.text)))
             .filter(|(_, t)| !t.is_empty())
             .map(|(c, t)| match c.speaker {
@@ -354,5 +363,18 @@ mod tests {
         assert_eq!((s.local.temperature, s.local.context, s.local.autostart, s.local.timeout_min), (0.2, 65_536, true, 30));
         let partial: Settings = serde_json::from_str(&old.replace("}}", r#"},"local":{"temperature":0.5}}"#)).unwrap();
         assert_eq!((partial.local.temperature, partial.local.timeout_min), (0.5, 30));
+    }
+
+    #[test]
+    fn old_meetings_have_empty_notes_and_windows_work() {
+        let old = r#"{"id":"x","title":"T","created":"2026-10-01T10:00:00+03:00","source":"a.m4a","duration_s":300,
+            "language":"ar","status":"ready","chunks":[
+            {"start_s":0,"end_s":100,"text":"hello"},{"start_s":100,"end_s":200,"text":"price is 40","speaker":1},
+            {"start_s":200,"end_s":300,"text":"bye"}]}"#;
+        let m: Meeting = serde_json::from_str(old).unwrap();
+        assert!(m.notes.is_empty());
+        assert_eq!(m.transcript_between(120.0, 150.0), "[01:40] Speaker 1: price is 40");
+        assert_eq!(m.transcript_between(90.0, 210.0).lines().count(), 3);
+        assert_eq!(m.transcript_text().lines().count(), 3);
     }
 }

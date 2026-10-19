@@ -106,7 +106,7 @@
 
           <div class="extract-right">
             <div class="mode-row" id="mode-row">
-              <div class="fmt-opt active" data-mode="outputs">OUTPUTS</div><div class="fmt-opt" data-mode="ask">ASK</div>
+              <div class="fmt-opt active" data-mode="outputs">OUTPUTS</div><div class="fmt-opt" data-mode="ask">ASK</div><div class="fmt-opt" data-mode="notes" id="mode-notes">NOTES</div>
             </div>
             <div class="extract-controls">
               <div class="field"><label>01 / Title</label><input id="m-title" dir="auto" /></div>
@@ -146,6 +146,15 @@
                   <button id="btn-clear-chat" class="hbtn">CLEAR</button>
                 </div>
               </div>
+            </div>
+            <div id="notes-panel" class="notes-panel hidden">
+              <div class="notes-bar">
+                <button id="n-stamp" class="hbtn" title="Start a note at the player's position (M)">+ TIME</button>
+                <button id="n-import" class="hbtn" title="Add notes from a .txt, .md or .docx file">IMPORT</button>
+                <span id="n-saved" class="n-saved"></span>
+              </div>
+              <textarea id="notes-input" dir="auto" spellcheck="false" placeholder="// your notes: every output builds on them&#10;// mark a time to look back at: [08:12], @8, min 8&#10;// add ? or &quot;missed&quot; for parts you didn't catch&#10;//   @8 missed the price they quoted ?"></textarea>
+              <div id="n-marks" class="n-marks"></div>
             </div>
             <div class="timeline" id="timeline-panel">
               <div id="tl" class="tl-block">
@@ -413,6 +422,7 @@
         <div id="rec-time" class="rec-time">00:00</div>
         <div class="tl-bar big"><div class="tl-fill" id="rec-level"></div></div>
         <div class="field"><label>Title</label><input id="rec-title" placeholder="// optional" /></div>
+        <div class="field"><label>Notes</label><textarea id="rec-notes" rows="7" dir="auto" spellcheck="false" placeholder="// type as you go: each new line gets the recording time"></textarea></div>
         <button id="btn-stop" class="go-btn">STOP &amp; TRANSCRIBE</button>
         <div class="field-note">// audio stays on this laptop</div>
       </div>

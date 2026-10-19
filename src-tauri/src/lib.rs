@@ -283,7 +283,10 @@ pub(crate) fn monitor(app: &AppHandle, lines: usize) -> Monitor {
                 brain::INDEX_JOB => "Brain · indexing".into(),
                 brain::ASK_JOB => "Brain · question".into(),
                 "brain-tag" => "Brain · tagging".into(),
-                _ => state.store.load_meeting(&p.id).map(|m| m.title).unwrap_or_else(|_| p.id.clone()),
+                id => match id.strip_suffix("#note") {
+                    Some(mid) => state.store.load_meeting(mid).map(|m| format!("{} · note", m.title)).unwrap_or_else(|_| p.id.clone()),
+                    None => state.store.load_meeting(id).map(|m| m.title).unwrap_or_else(|_| p.id.clone()),
+                },
             },
             stage: p.stage.clone(),
             done: p.done,
@@ -498,6 +501,7 @@ fn new_meeting(state: &AppState, title: String, source: String) -> CmdResult<Mee
         outputs: Vec::new(),
         speakers: Default::default(),
         chat: Vec::new(),
+        notes: String::new(),
     };
     state.store.save_meeting(&m).map_err(err)?;
     Ok(m)
@@ -887,7 +891,7 @@ pub(crate) fn do_generate(app: &AppHandle, id: &str, template_id: &str) -> CmdRe
             return Err("this meeting has no transcript yet".to_string());
         }
         let prompt =
-            summarize::build_prompt(&template, &settings.output_language, &m.title, &m.transcript_text(), &settings.glossary);
+            summarize::build_prompt(&template, &settings.output_language, &m.title, &m.transcript_text(), &settings.glossary, &m.notes);
         let what = format!("{} for \u{201c}{}\u{201d}", template.name, m.title);
         let (text, provider) = write_with_provider(&app, &id, &what, &prompt, false)?;
         let out = Output {
@@ -931,7 +935,8 @@ pub(crate) fn do_ask(app: &AppHandle, id: &str, question: &str) -> CmdResult<Cha
         }
         let history: Vec<(String, String)> =
             m.chat.iter().rev().take(10).rev().map(|c| (c.role.clone(), c.text.clone())).collect();
-        let prompt = summarize::build_question(&m.title, &m.transcript_text(), &settings.glossary, &history, question.trim());
+        let prompt =
+            summarize::build_question(&m.title, &m.transcript_text(), &settings.glossary, &m.notes, &history, question.trim());
         let what = format!("question about \u{201c}{}\u{201d}", m.title);
         let (text, provider) = write_with_provider(&app, &id, &what, &prompt, true)?;
         let q = ChatMsg { role: "user".into(), text: question.trim().into(), created: Local::now(), provider: String::new() };
@@ -949,6 +954,45 @@ fn clear_chat(state: State<AppState>, id: String) -> CmdResult<()> {
     let mut m = state.store.load_meeting(&id).map_err(err)?;
     m.chat.clear();
     state.store.save_meeting(&m).map_err(err)
+}
+
+// ---------- notes ----------
+
+#[tauri::command]
+fn save_notes(state: State<AppState>, id: String, notes: String) -> CmdResult<()> {
+    let mut m = state.store.load_meeting(&id).map_err(err)?;
+    if m.notes != notes {
+        m.notes = notes;
+        state.store.save_meeting(&m).map_err(err)?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn read_notes_file(path: String) -> CmdResult<String> {
+    mahdar_core::notes::read_file(Path::new(&path)).map_err(err)
+}
+
+/// Seconds of transcript either side of a note's time that the fill-in sees.
+const FILL_WINDOW_S: f64 = 180.0;
+
+#[tauri::command]
+async fn fill_note(app: AppHandle, id: String, at: f64, note: String) -> CmdResult<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let settings = state.store.load_settings();
+        let m = state.store.load_meeting(&id).map_err(err)?;
+        let excerpt = m.transcript_between(at - FILL_WINDOW_S, at + FILL_WINDOW_S);
+        if excerpt.is_empty() {
+            return Err(format!("nothing was transcribed around {}", fmt_ts(at)));
+        }
+        let prompt = summarize::build_fill(&m.title, &excerpt, &settings.glossary, at, &note);
+        let what = format!("note at {} in \u{201c}{}\u{201d}", fmt_ts(at), m.title);
+        // Own job id, so the OUTPUTS timeline doesn't show this as an output being written.
+        write_with_provider(&app, &format!("{id}#note"), &what, &prompt, false).map(|(text, _)| text.trim().to_string())
+    })
+    .await
+    .map_err(err)?
 }
 
 // ---------- recording ----------
@@ -969,13 +1013,17 @@ fn recording_level(state: State<AppState>) -> Option<(f32, f64)> {
 }
 
 #[tauri::command]
-fn stop_recording(app: AppHandle, state: State<AppState>, title: Option<String>) -> CmdResult<String> {
+fn stop_recording(app: AppHandle, state: State<AppState>, title: Option<String>, notes: Option<String>) -> CmdResult<String> {
     let (rec, _) = state.recorder.lock().unwrap().take().ok_or("not recording")?;
     let pcm = rec.stop().map_err(err)?;
     let title = title
         .filter(|t| !t.trim().is_empty())
         .unwrap_or_else(|| format!("Recording {}", Local::now().format("%d %b %Y %H:%M")));
-    let m = new_meeting(&state, title, "microphone".into())?;
+    let mut m = new_meeting(&state, title, "microphone".into())?;
+    if let Some(n) = notes.filter(|n| !n.trim().is_empty()) {
+        m.notes = n;
+        state.store.save_meeting(&m).map_err(err)?;
+    }
     log::info("record", format!("recorded {} → \u{201c}{}\u{201d}", fmt_ts(pcm.len() as f64 / audio::SAMPLE_RATE as f64), m.title));
     spawn_transcription(app, m.id.clone(), Err(pcm));
     Ok(m.id)
@@ -1088,6 +1136,9 @@ pub fn run() {
             delete_output,
             ask_meeting,
             clear_chat,
+            save_notes,
+            read_notes_file,
+            fill_note,
             remote_info,
             remote_new_token,
             remote_setup_https,
