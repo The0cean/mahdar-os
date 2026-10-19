@@ -471,7 +471,7 @@ function renderList() {
   $("rows").innerHTML = ms.length ? ms.map((m) => {
     const p = progress[m.id];
     const tag = p ? `<span class="tag live">${p.total ? Math.round((100 * p.done) / p.total) + "%" : "WORKING"}</span>`
-      : m.status === "transcribing" ? '<span class="tag live">WORKING</span>' : m.status === "failed" ? '<span class="tag err">FAILED</span>'
+      : m.status === "recording" ? '<span class="tag live">REC</span>' : m.status === "transcribing" ? '<span class="tag live">WORKING</span>' : m.status === "failed" ? '<span class="tag err">FAILED</span>'
       : m.n_outputs ? `<span class="tag ok">${m.n_outputs} OUT</span>` : '<span class="tag ready">READY</span>';
     return `<button class="row" data-id="${m.id}"><div class="t"><div class="name" dir="auto">${esc(m.title)}</div><div class="meta">${when(m.created)}${m.duration_s ? " · " + ts(m.duration_s) : ""}</div></div>${tag}</button>`;
   }).join("") : `<div class="empty">// ${q ? "no matches" : "no meetings yet<br>// tap RECORD to start"}</div>`;
