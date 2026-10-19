@@ -23,7 +23,10 @@ pub(crate) struct AppState {
     engine: Mutex<Option<Engine>>,
     /// Speaker diarizer (Sortformer), loaded on first use.
     diarizer: Mutex<Option<Engine>>,
-    recorder: Mutex<Option<(Recorder, Instant)>>,
+    /// The recording in progress, and its meeting id.
+    recorder: Mutex<Option<(Recorder, String)>>,
+    /// Unfinished recordings found at startup, for the UI to announce once.
+    recovered: Mutex<Vec<String>>,
     /// FastFlowLM server started by Mahdar; stopped when the app exits.
     flm: Mutex<Option<std::process::Child>>,
     /// Mahdar Remote server task (phone access), when enabled.
@@ -470,6 +473,9 @@ fn rename_meeting(state: State<AppState>, id: String, title: String) -> CmdResul
 
 #[tauri::command]
 fn delete_meeting(app: AppHandle, state: State<AppState>, id: String) -> CmdResult<()> {
+    if state.recorder.lock().unwrap().as_ref().is_some_and(|(_, rid)| *rid == id) {
+        return Err("this meeting is still recording: stop it first".into());
+    }
     state.store.delete_meeting(&id).map_err(err)?;
     brain::forget(&app, &id);
     Ok(())
@@ -548,7 +554,15 @@ fn loaded_diarizer(state: &AppState) -> anyhow::Result<Option<std::sync::MutexGu
 
 /// Background job: get PCM (decode file or use recorded samples), save audio.wav,
 /// detect speakers (when enabled), transcribe.
-fn spawn_transcription(app: AppHandle, id: String, input: Result<PathBuf, Vec<f32>>) {
+/// Where a transcription's audio comes from.
+pub(crate) enum Input {
+    /// An audio or video file, decoded with ffmpeg.
+    File(PathBuf),
+    /// A microphone recording spool (deleted once `audio.wav` is saved).
+    Spool(PathBuf),
+}
+
+fn spawn_transcription(app: AppHandle, id: String, input: Input) {
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
         let emit = |stage: &str, done: usize, total: usize| {
@@ -560,11 +574,15 @@ fn spawn_transcription(app: AppHandle, id: String, input: Result<PathBuf, Vec<f3
         let run = || -> anyhow::Result<()> {
             emit("decoding", 0, 0);
             let pcm = match &input {
-                Ok(path) => audio::decode_to_pcm(path)?,
-                Err(samples) => samples.clone(),
+                Input::File(path) => audio::decode_to_pcm(path)?,
+                Input::Spool(path) => audio::read_spool(path)?,
             };
+            anyhow::ensure!(!pcm.is_empty(), "no audio was recorded");
             // Write the audio first, then publish the duration: the UI loads the player once duration > 0.
             audio::write_wav(&state.store.audio_path(&id), &pcm)?;
+            if let Input::Spool(path) = &input {
+                let _ = std::fs::remove_file(path);
+            }
             // Phone copy in the background, so playback on the phone starts instantly.
             let wav = state.store.audio_path(&id);
             std::thread::spawn(move || {
@@ -672,7 +690,7 @@ pub(crate) fn import_path(app: &AppHandle, p: &Path) -> CmdResult<String> {
         "import",
         format!("{} ({:.1} MB) → \u{201c}{}\u{201d}", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), size as f64 / 1e6, m.title),
     );
-    spawn_transcription(app.clone(), m.id.clone(), Ok(p.to_path_buf()));
+    spawn_transcription(app.clone(), m.id.clone(), Input::File(p.to_path_buf()));
     Ok(m.id)
 }
 
@@ -691,15 +709,24 @@ pub(crate) fn start_retranscribe(app: AppHandle, id: String) -> CmdResult<()> {
     let input = {
         let state = app.state::<AppState>();
         let mut m = state.store.load_meeting(&id).map_err(err)?;
-        let audio = state.store.audio_path(&id);
-        let input = if audio.is_file() { audio } else { PathBuf::from(&m.source) };
+        if m.status == Status::Recording {
+            return Err("this meeting is still recording".into());
+        }
+        let (audio, spool) = (state.store.audio_path(&id), state.store.recording_path(&id));
+        let input = if audio.is_file() {
+            Input::File(audio)
+        } else if spool.is_file() {
+            Input::Spool(spool)
+        } else {
+            Input::File(PathBuf::from(&m.source))
+        };
         m.status = Status::Transcribing;
         m.error = None;
         m.language = state.store.load_settings().language;
         state.store.save_meeting(&m).map_err(err)?;
         input
     };
-    spawn_transcription(app, id, Ok(input));
+    spawn_transcription(app, id, input);
     Ok(())
 }
 
@@ -997,36 +1024,69 @@ async fn fill_note(app: AppHandle, id: String, at: f64, note: String) -> CmdResu
 
 // ---------- recording ----------
 
+/// Start recording into a new meeting, written to disk as it goes. Returns the meeting id.
 #[tauri::command]
-fn start_recording(state: State<AppState>) -> CmdResult<()> {
+fn start_recording(state: State<AppState>, title: Option<String>) -> CmdResult<String> {
     let mut rec = state.recorder.lock().unwrap();
     if rec.is_some() {
         return Err("already recording".into());
     }
-    *rec = Some((Recorder::start().map_err(err)?, Instant::now()));
-    Ok(())
+    let mut m = new_meeting(&state, recording_title(title), "microphone".into())?;
+    m.status = Status::Recording;
+    state.store.save_meeting(&m).map_err(err)?;
+    match Recorder::start(&state.store.recording_path(&m.id)) {
+        Ok(r) => {
+            log::info("record", format!("recording \u{201c}{}\u{201d}", m.title));
+            *rec = Some((r, m.id.clone()));
+            Ok(m.id)
+        }
+        Err(e) => {
+            let _ = state.store.delete_meeting(&m.id);
+            Err(err(e))
+        }
+    }
 }
 
+fn recording_title(title: Option<String>) -> String {
+    title
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| format!("Recording {}", Local::now().format("%d %b %Y %H:%M")))
+}
+
+/// (peak level, seconds recorded) while recording.
 #[tauri::command]
 fn recording_level(state: State<AppState>) -> Option<(f32, f64)> {
-    state.recorder.lock().unwrap().as_ref().map(|(r, t)| (r.level(), t.elapsed().as_secs_f64()))
+    state.recorder.lock().unwrap().as_ref().map(|(r, _)| (r.level(), r.seconds()))
 }
 
 #[tauri::command]
 fn stop_recording(app: AppHandle, state: State<AppState>, title: Option<String>, notes: Option<String>) -> CmdResult<String> {
-    let (rec, _) = state.recorder.lock().unwrap().take().ok_or("not recording")?;
-    let pcm = rec.stop().map_err(err)?;
-    let title = title
-        .filter(|t| !t.trim().is_empty())
-        .unwrap_or_else(|| format!("Recording {}", Local::now().format("%d %b %Y %H:%M")));
-    let mut m = new_meeting(&state, title, "microphone".into())?;
+    let (rec, id) = state.recorder.lock().unwrap().take().ok_or("not recording")?;
+    let stopped = rec.stop();
+    let mut m = state.store.load_meeting(&id).map_err(err)?;
+    if title.as_deref().is_some_and(|t| !t.trim().is_empty()) {
+        m.title = recording_title(title);
+    }
     if let Some(n) = notes.filter(|n| !n.trim().is_empty()) {
         m.notes = n;
-        state.store.save_meeting(&m).map_err(err)?;
     }
-    log::info("record", format!("recorded {} → \u{201c}{}\u{201d}", fmt_ts(pcm.len() as f64 / audio::SAMPLE_RATE as f64), m.title));
-    spawn_transcription(app, m.id.clone(), Err(pcm));
-    Ok(m.id)
+    let spool = state.store.recording_path(&id);
+    if let Err(e) = stopped {
+        // The spool is still good up to its last checkpoint: transcribe what was saved.
+        log::error("record", format!("\u{201c}{}\u{201d}: recorder failed: {e:#}", m.title));
+    }
+    m.status = Status::Transcribing;
+    state.store.save_meeting(&m).map_err(err)?;
+    log::info("record", format!("recorded {} \u{2192} \u{201c}{}\u{201d}", fmt_ts(audio::spool_seconds(&spool)), m.title));
+    spawn_transcription(app, id.clone(), Input::Spool(spool));
+    Ok(id)
+}
+
+/// Titles of unfinished recordings recovered at startup (each is returned once).
+#[tauri::command]
+fn take_recovered(state: State<AppState>) -> Vec<String> {
+    std::mem::take(&mut *state.recovered.lock().unwrap())
 }
 
 fn native_dir(app: &AppHandle) -> PathBuf {
@@ -1058,8 +1118,23 @@ pub fn run() {
             // Jobs don't survive a restart: mark interrupted transcriptions as failed (re-transcribe
             // fixes them), or, after a crash restart by the watchdog, start them again.
             let mut resume = Vec::new();
+            // Recordings cut off by a crash, power loss or forced restart: keep what reached the disk.
+            let mut recover = Vec::new();
             for summary in store.list_meetings()? {
-                if summary.status == Status::Transcribing {
+                if summary.status == Status::Recording {
+                    let Ok(mut m) = store.load_meeting(&summary.id) else { continue };
+                    let secs = audio::spool_seconds(&store.recording_path(&m.id));
+                    if secs >= 1.0 {
+                        log::warn("record", format!("recovering unfinished recording \u{201c}{}\u{201d} ({})", m.title, fmt_ts(secs)));
+                        m.status = Status::Transcribing;
+                        recover.push((m.id.clone(), format!("{} ({})", m.title, fmt_ts(secs))));
+                    } else {
+                        log::warn("record", format!("\u{201c}{}\u{201d} stopped before any audio was saved", m.title));
+                        m.status = Status::Failed;
+                        m.error = Some("Mahdar stopped before any audio was saved.".into());
+                    }
+                    store.save_meeting(&m)?;
+                } else if summary.status == Status::Transcribing {
                     if recovered {
                         log::warn("app", format!("resuming interrupted transcription \u{201c}{}\u{201d}", summary.title));
                         resume.push(summary.id.clone());
@@ -1079,6 +1154,7 @@ pub fn run() {
                 engine: Mutex::new(None),
                 diarizer: Mutex::new(None),
                 recorder: Mutex::new(None),
+                recovered: Mutex::new(recover.iter().map(|(_, t)| t.clone()).collect()),
                 flm: Mutex::new(None),
                 remote: Mutex::new(None),
                 progress: Mutex::new(Default::default()),
@@ -1089,6 +1165,10 @@ pub fn run() {
             });
             for id in resume {
                 let _ = start_retranscribe(app.handle().clone(), id);
+            }
+            for (id, _) in recover {
+                let spool = app.state::<AppState>().store.recording_path(&id);
+                spawn_transcription(app.handle().clone(), id, Input::Spool(spool));
             }
             if watchdog_on {
                 watchdog::sync(&app.path().app_data_dir()?, true);
@@ -1139,6 +1219,7 @@ pub fn run() {
             save_notes,
             read_notes_file,
             fill_note,
+            take_recovered,
             remote_info,
             remote_new_token,
             remote_setup_https,

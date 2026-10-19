@@ -16,7 +16,7 @@ import { open, save, ask as askDialog } from "@tauri-apps/plugin-dialog";
 import { marked } from "marked";
 
 // ───────── types (mirror mahdar-core) ─────────
-type Status = "transcribing" | "ready" | "failed";
+type Status = "recording" | "transcribing" | "ready" | "failed";
 interface Chunk { start_s: number; end_s: number; text: string; flag: string; speaker: number | null; edited: boolean }
 interface ChatMsg { role: "user" | "assistant"; text: string; created: string; provider: string }
 interface Output { id: string; template_id: string; template_name: string; provider: string; created: string; text: string }
@@ -521,7 +521,7 @@ function renderLibrary() {
   $("meeting-rows").innerHTML = rows.length
     ? rows.map((m, i) => {
         const pr = progress.get(m.id);
-        const tag = retrying.has(m.id) ? `<span class="tag live">FIXING</span>` : m.status === "transcribing"
+        const tag = retrying.has(m.id) ? `<span class="tag live">FIXING</span>` : m.status === "recording" ? `<span class="tag live">● REC</span>` : m.status === "transcribing"
           ? `<span class="tag live">${pr && pr.total ? `${Math.round((100 * pr.done) / pr.total)}%` : "QUEUED"}</span>`
           : m.status === "failed" ? `<span class="tag err">FAILED</span>` : `<span class="tag ${m.n_outputs ? "ok" : "ready"}">READY</span>`;
         return `<tr data-id="${m.id}"><td class="num-col">${pad(rows.length - i)}</td><td class="t" dir="auto">${esc(m.title)}</td>
@@ -574,10 +574,14 @@ async function startDownload(ev: Event) {
 // ───────── recording ─────────
 let recTimer = 0;
 let recElapsed = 0;
+let recId = "";
+let recNotesTimer = 0;
 async function startRecording() {
-  try { await invoke("start_recording"); } catch (e) { return toast(String(e), true); }
-  $<HTMLInputElement>("rec-title").value = $<HTMLInputElement>("rec-title-quick").value;
+  const title = $<HTMLInputElement>("rec-title-quick").value;
+  try { recId = await invoke<string>("start_recording", { title }); } catch (e) { return toast(String(e), true); }
+  $<HTMLInputElement>("rec-title").value = title;
   recElapsed = 0;
+  refreshLibrary();
   $("rec-overlay").classList.remove("hidden");
   $("rec-notes").focus();
   recTimer = window.setInterval(async () => {
@@ -588,8 +592,18 @@ async function startRecording() {
     $("rec-level").style.width = `${Math.min(100, Math.sqrt(r[0]) * 100)}%`;
   }, 120);
 }
+/** Recording notes go to disk as you type, so a crash doesn't lose them. */
+function saveRecNotesSoon() {
+  clearTimeout(recNotesTimer);
+  recNotesTimer = window.setTimeout(() => {
+    recNotesTimer = 0;
+    if (recId) invoke("save_notes", { id: recId, notes: $<HTMLTextAreaElement>("rec-notes").value }).catch(() => { /* saved again on stop */ });
+  }, 1500);
+}
 async function stopRecording() {
   clearInterval(recTimer);
+  clearTimeout(recNotesTimer);
+  recId = "";
   $("rec-overlay").classList.add("hidden");
   try {
     const notes = $<HTMLTextAreaElement>("rec-notes");
@@ -630,7 +644,7 @@ function loadAudio() {
   updatePlayer();
   const m = current;
   if (!m || m.duration_s <= 0) {
-    $("p-msg").textContent = m?.status === "transcribing" ? "// preparing audio…" : "";
+    $("p-msg").textContent = m?.status === "transcribing" ? "// preparing audio…" : m?.status === "recording" ? "// recording…" : "";
     return;
   }
   invoke<string>("audio_path", { id: m.id }).then((p) => {
@@ -654,6 +668,7 @@ function renderMeeting() {
   const fix = $<HTMLButtonElement>("btn-fix");
   fix.classList.toggle("hidden", !flagged && !retrying.has(m.id));
   fix.disabled = retrying.has(m.id) || m.status !== "ready";
+  ["btn-retranscribe", "btn-delete"].forEach((b) => ($<HTMLButtonElement>(b).disabled = m.status === "recording"));
   fix.textContent = retrying.has(m.id) ? "FIXING…" : `FIX UNCLEAR (${flagged})`;
   $("btn-follow").classList.toggle("on", follow);
   renderTranscript();
@@ -669,7 +684,7 @@ function renderTranscript() {
   const q = $<HTMLInputElement>("t-search").value.trim();
   const box = $("transcript");
   if (!m.chunks.length) {
-    box.innerHTML = `<div class="t-empty">${m.status === "transcribing" ? "// transcribing: text appears when done" : m.status === "failed" ? "// transcription failed: see the timeline →" : "// no transcript"}</div>`;
+    box.innerHTML = `<div class="t-empty">${m.status === "recording" ? "// recording: the transcript starts when you press STOP" : m.status === "transcribing" ? "// transcribing: text appears when done" : m.status === "failed" ? "// transcription failed: see the timeline →" : "// no transcript"}</div>`;
     return;
   }
   const hasSpk = m.chunks.some((c) => c.speaker);
@@ -752,6 +767,10 @@ function renderTimeline() {
     const flagged = m.chunks.filter((c) => c.flag).length;
     meta[4] = flagged ? `${flagged} unclear part${flagged > 1 ? "s" : ""} marked ⚠` : "clean";
     statusText = `// transcript ready · ${dateStr(m.created)}`;
+  } else if (m.status === "recording") {
+    activeIdx = 0;
+    pct = 0;
+    statusText = "// recording: saved to disk as it goes";
   } else {
     pct = 0;
     statusText = "// failed";
@@ -1492,6 +1511,7 @@ async function init() {
   $("n-stamp").onclick = () => stampNote(true);
   $("n-import").onclick = importNotes;
   $("rec-notes").addEventListener("beforeinput", (e) => stampRecNotes(e as InputEvent));
+  $("rec-notes").addEventListener("input", saveRecNotesSoon);
   window.addEventListener("beforeunload", () => { flushNotes(); });
   $("btn-ask").onclick = ask;
   $("ask-input").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } };
@@ -1706,6 +1726,9 @@ async function init() {
     if (current?.id === ev.payload) await openMeeting(ev.payload);
     if (m?.status === "ready") toast(`Transcribed: ${m.title}`);
     if (m?.status === "failed") toast(`Failed: ${m.title}`, true);
+  });
+  invoke<string[]>("take_recovered").then((titles) => {
+    if (titles.length) toast(`Recovered an unfinished recording: ${titles.join(", ")}. Transcribing it now.`);
   });
   await listen<[number, number]>("model-download", (ev) => {
     const pct = `${Math.floor((100 * ev.payload[0]) / ev.payload[1])}%`;

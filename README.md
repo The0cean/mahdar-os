@@ -4,7 +4,7 @@ Mahdar is a desktop app that turns Arabic and English meetings into transcripts,
 
 - **Speech to text**: [Cohere Transcribe Arabic](https://huggingface.co/CohereLabs/cohere-transcribe-arabic-07-2026) (Apache 2.0), Q8_0 GGUF, run through [transcribe.cpp](https://github.com/handy-computer/transcribe.cpp) (MIT) on the Radeon GPU (Vulkan) or the CPU. On the Ryzen AI 9 HX 370 / Radeon 890M, 30 minutes of meeting audio takes about 1.5 minutes.
 - **Minutes and notes**: written by a local OpenAI-compatible server such as FastFlowLM (`flm serve gemma4-it:12b`), which keeps everything on the laptop. Optional cloud writers: the Claude API with your own key, Claude Code (`claude -p`) or Cursor (`agent -p`) with your own login.
-- **Audio**: record from the microphone, or import m4a/mp3/wav/etc. Importing needs `ffmpeg` on PATH.
+- **Audio**: record from the microphone, or import m4a/mp3/wav/etc. Importing needs `ffmpeg` on PATH. Recordings are saved to disk as they go (with notes typed in the recording window), so a crash, restart or power loss loses at most the last few seconds: the next time Mahdar starts, it recovers the recording and transcribes it.
 
 ## Install
 
