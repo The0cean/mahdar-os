@@ -195,7 +195,8 @@ async fn status(State(ctx): State<Ctx>) -> ApiResult<serde_json::Value> {
 }
 
 async fn list(State(ctx): State<Ctx>) -> ApiResult<Vec<mahdar_core::store::MeetingSummary>> {
-    state(&ctx).store.list_meetings().map(Json).map_err(bad)
+    // Archived meetings stay on the laptop's Library → ARCHIVED.
+    state(&ctx).store.list_meetings().map(|v| Json(v.into_iter().filter(|m| !m.archived).collect())).map_err(bad)
 }
 
 async fn meeting(State(ctx): State<Ctx>, Path(id): Path<String>) -> ApiResult<mahdar_core::Meeting> {

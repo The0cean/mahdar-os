@@ -61,16 +61,18 @@
           </div>
 
           <div class="section-title list-title">
-            <span>Meetings</span>
+            <span id="list-name">Meetings</span>
+            <button id="btn-archived" class="hbtn" title="Meetings you archived">ARCHIVED</button>
             <div id="join-bar" class="join-bar hidden">
               <span id="join-count" class="field-note"></span>
               <button id="btn-join" class="hbtn accent" title="Join the ticked recordings into one meeting, in recording order">JOIN INTO ONE</button>
+              <button id="btn-archive-sel" class="hbtn" title="Move the ticked meetings out of this list (nothing is deleted)">ARCHIVE</button>
               <button id="btn-join-clear" class="hbtn">CLEAR</button>
             </div>
             <input id="search" class="hsearch" placeholder="// search" />
           </div>
           <table class="dtable">
-            <thead><tr><th class="sel-col" title="Tick recordings to join them"></th><th class="num-col">#</th><th>Title</th><th>Date</th><th class="r">Length</th><th class="r">Outputs</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th class="sel-col" title="Tick meetings to join or archive them"></th><th class="num-col">#</th><th>Title</th><th>Date</th><th class="r">Length</th><th class="r">Outputs</th><th>Status</th><th></th></tr></thead>
             <tbody id="meeting-rows"></tbody>
           </table>
           <div id="setup-warning" class="setup-warning hidden"></div>
@@ -95,6 +97,7 @@
               <button id="btn-brain-index" class="hbtn" title="Add this meeting to the Brain (search + tags across meetings)">BRAIN</button>
               <button id="btn-trim" class="hbtn" title="Cut the start, the end or parts in the middle">TRIM</button>
               <button id="btn-retranscribe" class="hbtn">RE-TRANSCRIBE</button>
+              <button id="btn-archive" class="hbtn" title="Move this meeting out of the Library list (nothing is deleted)">ARCHIVE</button>
               <button id="btn-delete" class="hbtn danger">DELETE</button>
             </div>
             <div class="player" id="player-bar">

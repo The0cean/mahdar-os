@@ -546,6 +546,7 @@ fn new_meeting(state: &AppState, title: String, source: String) -> CmdResult<Mee
         notes: String::new(),
         gaps: Vec::new(),
         trimmed_s: 0.0,
+        archived: false,
     };
     state.store.save_meeting(&m).map_err(err)?;
     Ok(m)
@@ -1276,6 +1277,31 @@ fn recording_level(state: State<AppState>) -> Option<RecordingLevel> {
     })
 }
 
+// ---------- archive ----------
+
+/// Move meetings to the archive (out of the Library list) or back. Returns how many changed.
+#[tauri::command]
+fn set_archived(state: State<AppState>, ids: Vec<String>, archived: bool) -> CmdResult<usize> {
+    // Refuse first, so a mixed selection doesn't half-happen.
+    for id in &ids {
+        if let Some(why) = busy(&state, id) {
+            let title = state.store.load_meeting(id).map(|m| m.title).unwrap_or_default();
+            return Err(format!("\u{201c}{title}\u{201d} {why}"));
+        }
+    }
+    let mut changed = 0;
+    for id in &ids {
+        let mut m = state.store.load_meeting(id).map_err(err)?;
+        if m.archived != archived {
+            m.archived = archived;
+            state.store.save_meeting(&m).map_err(err)?;
+            changed += 1;
+        }
+    }
+    log::info("library", format!("{} {changed} meeting{}", if archived { "archived" } else { "unarchived" }, if changed == 1 { "" } else { "s" }));
+    Ok(changed)
+}
+
 // ---------- trimming ----------
 
 /// The meeting's waveform as `n` peaks (0..1), for the trim editor.
@@ -1563,6 +1589,7 @@ pub fn run() {
             stop_recording,
             pause_recording,
             audio_peaks,
+            set_archived,
             trim_meeting,
             restore_original,
             join_meetings,

@@ -134,6 +134,9 @@ pub struct Meeting {
     /// RESTORE ORIGINAL or the meeting is deleted.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub trimmed_s: f64,
+    /// Out of the Library list (shown under ARCHIVED); nothing else changes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub archived: bool,
 }
 
 impl Meeting {
@@ -190,6 +193,7 @@ pub struct MeetingSummary {
     pub duration_s: f64,
     pub status: Status,
     pub n_outputs: usize,
+    pub archived: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -379,6 +383,7 @@ impl Store {
                     duration_s: m.duration_s,
                     status: m.status,
                     n_outputs: m.outputs.len(),
+                    archived: m.archived,
                 });
             }
         }
