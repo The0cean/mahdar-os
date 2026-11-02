@@ -50,6 +50,8 @@ pub struct Output {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
+    /// The microphone is recording into `recording.wav`.
+    Recording,
     Transcribing,
     Ready,
     Failed,
@@ -261,6 +263,12 @@ impl Store {
 
     pub fn audio_path(&self, id: &str) -> PathBuf {
         self.meeting_dir(id).join("audio.wav")
+    }
+
+    /// The microphone recording as it is written (see `audio::read_spool`); removed once
+    /// `audio.wav` is saved.
+    pub fn recording_path(&self, id: &str) -> PathBuf {
+        self.meeting_dir(id).join("recording.wav")
     }
 
     pub fn save_meeting(&self, m: &Meeting) -> Result<()> {
