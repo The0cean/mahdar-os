@@ -1074,9 +1074,7 @@ async function renderSettings() {
   setFmt("s-remote", settings.remote_enabled ? "on" : "off");
   setFmt("s-watchdog", settings.watchdog ? "on" : "off");
   setFmt("s-effort", settings.provider.kind === "claude_api" ? settings.provider.effort : (store.get("apiEffort") ?? ""));
-  await renderApiKey();
   $<HTMLInputElement>("s-remote-port").value = String(settings.remote_port || 8787);
-  await renderRemote();
   $<HTMLInputElement>("s-watch").value = settings.watch_folder ?? "";
   $<HTMLTextAreaElement>("s-glossary").value = settings.glossary ?? "";
   $<HTMLInputElement>("s-model").value = settings.model_path;
@@ -1108,11 +1106,14 @@ async function renderSettings() {
   $<HTMLInputElement>("s-local-timeout").value = String(settings.local.timeout_min);
   setFmt("s-local-autostart", settings.local.autostart ? "on" : "off");
   setFmt("s-auto-update", settings.auto_update ? "on" : "off");
-  upd = await invoke<UpdateInfo>("update_status");
-  renderUpdate();
   renderCustomTemplates();
   $("s-data-dir").textContent = `// data: ${status.data_dir}`;
   markSettingsDirty(false);
+  // Slow lookups (Credential Manager, network adapters, Tailscale) fill in when they answer,
+  // so the page shows at once.
+  renderApiKey().catch((e) => toast(String(e), true));
+  renderRemote().catch((e) => toast(String(e), true));
+  invoke<UpdateInfo>("update_status").then((u) => { upd = u; renderUpdate(); }).catch(() => { /* shown on the next check */ });
 }
 
 function markSettingsDirty(dirty = true) {
@@ -1210,8 +1211,12 @@ async function saveSettings() {
   } catch (e) { toast(String(e), true); }
 }
 
+let remoteSeq = 0;
 async function renderRemote() {
+  const seq = ++remoteSeq;
+  if (!$("remote-urls").innerHTML) $("remote-urls").innerHTML = `<div class="field-note">// looking up this laptop's addresses…</div>`;
   const r = await invoke<RemoteInfo>("remote_info");
+  if (seq !== remoteSeq) return; // a newer lookup is on its way
   const label: Record<string, string> = { https: "Tailscale · HTTPS (recording works)", tailscale: "Tailscale", wifi: "Same Wi‑Fi", lan: "Other network adapter" };
   $("remote-urls").innerHTML = r.enabled
     ? (r.urls.length
