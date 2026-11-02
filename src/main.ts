@@ -23,10 +23,10 @@ interface Output { id: string; template_id: string; template_name: string; provi
 interface Meeting {
   id: string; title: string; created: string; source: string; duration_s: number; language: string;
   status: Status; error: string | null; transcribe_secs: number | null; chunks: Chunk[]; outputs: Output[];
-  speakers: Record<string, string>; chat: ChatMsg[]; notes: string; gaps?: Gap[]; trimmed_s?: number;
+  speakers: Record<string, string>; chat: ChatMsg[]; notes: string; gaps?: Gap[]; trimmed_s?: number; archived?: boolean;
 }
 interface Gap { at_s: number; missing_s: number; kind?: "lost" | "paused" | "joined" | "cut" }
-interface MeetingSummary { id: string; title: string; created: string; duration_s: number; status: Status; n_outputs: number }
+interface MeetingSummary { id: string; title: string; created: string; duration_s: number; status: Status; n_outputs: number; archived?: boolean }
 interface Template { id: string; name: string; prompt: string; builtin: boolean }
 type Provider =
   | { kind: "claude_cli"; model: string }
@@ -518,7 +518,12 @@ function renderLibrary() {
   $("btn-download")?.addEventListener("click", startDownload);
 
   const q = $<HTMLInputElement>("search").value.trim().toLowerCase();
-  const rows = meetings.filter((m) => !q || m.title.toLowerCase().includes(q));
+  const nArchived = meetings.filter((m) => m.archived).length;
+  if (showArchived && !nArchived) showArchived = false;
+  $("list-name").textContent = showArchived ? "Archived" : "Meetings";
+  $("btn-archived").textContent = showArchived ? "← BACK TO MEETINGS" : `ARCHIVED (${nArchived})`;
+  $("btn-archived").classList.toggle("hidden", !nArchived);
+  const rows = meetings.filter((m) => !!m.archived === showArchived && (!q || m.title.toLowerCase().includes(q)));
   $("meeting-rows").innerHTML = rows.length
     ? rows.map((m, i) => {
         const pr = progress.get(m.id);
@@ -526,11 +531,11 @@ function renderLibrary() {
           : m.status === "recorded" ? `<span class="tag rec" title="Not transcribed yet">RECORDED</span>` : m.status === "transcribing"
           ? `<span class="tag live">${pr?.stage === "joining" ? "JOINING" : pr?.stage === "saving audio" ? "SAVING" : pr && pr.total ? `${Math.round((100 * pr.done) / pr.total)}%` : "QUEUED"}</span>`
           : m.status === "failed" ? `<span class="tag err">FAILED</span>` : `<span class="tag ${m.n_outputs ? "ok" : "ready"}">READY</span>`;
-        return `<tr data-id="${m.id}"${selected.has(m.id) ? ` class="sel"` : ""}><td class="sel-col"><input type="checkbox" class="row-sel" title="Select to join" ${selected.has(m.id) ? "checked" : ""}></td><td class="num-col">${pad(rows.length - i)}</td><td class="t" dir="auto">${esc(m.title)}</td>
+        return `<tr data-id="${m.id}"${selected.has(m.id) ? ` class="sel"` : ""}><td class="sel-col"><input type="checkbox" class="row-sel" title="Select to join or archive" ${selected.has(m.id) ? "checked" : ""}></td><td class="num-col">${pad(rows.length - i)}</td><td class="t" dir="auto">${esc(m.title)}</td>
           <td class="mono">${dateStr(m.created)}</td><td class="r">${m.duration_s ? ts(m.duration_s) : "—"}</td>
           <td class="r">${m.n_outputs || "—"}</td><td>${tag}</td><td class="link">OPEN →</td></tr>`;
       }).join("")
-    : `<tr class="empty-row"><td colspan="8">${q ? "// no matches" : "// no meetings yet: drop a recording above"}</td></tr>`;
+    : `<tr class="empty-row"><td colspan="8">${q ? "// no matches" : showArchived ? "// nothing archived" : nArchived ? "// every meeting is archived: see ARCHIVED" : "// no meetings yet: drop a recording above"}</td></tr>`;
   $("meeting-rows").querySelectorAll<HTMLTableRowElement>("tr[data-id]").forEach((r) => {
     r.onclick = (e) => {
       const box = r.querySelector<HTMLInputElement>(".row-sel")!;
@@ -552,16 +557,33 @@ function renderLibrary() {
 }
 
 // ───────── joining recordings ─────────
-/** Meetings ticked in the Library, to join into one. */
+/** Meetings ticked in the Library, to join into one or archive. */
 const selected = new Set<string>();
+/** The Library shows archived meetings instead of the others. */
+let showArchived = false;
 
 function renderJoinBar() {
-  for (const id of selected) if (!meetings.some((m) => m.id === id)) selected.delete(id);
+  for (const id of selected) if (!meetings.some((m) => m.id === id && !!m.archived === showArchived)) selected.delete(id);
   const picked = meetings.filter((m) => selected.has(m.id));
   const busy = picked.find((m) => m.status === "recording" || m.status === "transcribing");
   $("join-bar").classList.toggle("hidden", !picked.length);
-  $("join-count").textContent = busy ? `// wait for “${busy.title}” to finish` : picked.length < 2 ? "// tick another recording to join" : `${picked.length} selected · ${ts(picked.reduce((a, m) => a + m.duration_s, 0))}`;
-  $<HTMLButtonElement>("btn-join").disabled = picked.length < 2 || !!busy;
+  $("join-count").textContent = busy ? `// wait for “${busy.title}” to finish` : `${picked.length} selected · ${ts(picked.reduce((a, m) => a + m.duration_s, 0))}`;
+  const join = $<HTMLButtonElement>("btn-join");
+  join.classList.toggle("hidden", showArchived);
+  join.disabled = picked.length < 2 || !!busy;
+  join.title = picked.length < 2 ? "Tick at least two recordings to join them" : "Join the ticked recordings into one meeting, in recording order";
+  const arch = $<HTMLButtonElement>("btn-archive-sel");
+  arch.textContent = showArchived ? "UNARCHIVE" : "ARCHIVE";
+  arch.disabled = !!busy;
+}
+
+async function archiveMeetings(ids: string[], archived: boolean) {
+  try {
+    const n = await invoke<number>("set_archived", { ids, archived });
+    toast(archived ? `Archived ${n === 1 ? "1 meeting" : `${n} meetings`} · find ${n === 1 ? "it" : "them"} under ARCHIVED` : `Back in the Library: ${n === 1 ? "1 meeting" : `${n} meetings`}`);
+  } catch (e) { toast(String(e), true); }
+  ids.forEach((id) => selected.delete(id));
+  await refreshLibrary();
 }
 
 async function joinSelected() {
@@ -755,7 +777,7 @@ function renderMeeting() {
   const title = $<HTMLInputElement>("m-title");
   if (document.activeElement !== title) title.value = m.title;
   const parts = m.chunks.length;
-  $("m-info").textContent = [m.duration_s ? ts(m.duration_s) : "", m.trimmed_s ? `trimmed ${ts(m.trimmed_s)}` : "", parts ? `${parts} parts` : "", m.language === "ar" ? "AR+EN" : "EN"].filter(Boolean).join(" · ");
+  $("m-info").textContent = [m.archived ? "archived" : "", m.duration_s ? ts(m.duration_s) : "", m.trimmed_s ? `trimmed ${ts(m.trimmed_s)}` : "", parts ? `${parts} parts` : "", m.language === "ar" ? "AR+EN" : "EN"].filter(Boolean).join(" · ");
   const flagged = m.chunks.filter((c) => c.flag).length;
   $("m-flags").textContent = flagged ? `${flagged} unclear` : "";
   $("m-flags").title = flagged ? "The model got stuck on these parts (⚠). Text there may be cut short." : "";
@@ -764,6 +786,8 @@ function renderMeeting() {
   fix.disabled = retrying.has(m.id) || m.status !== "ready";
   ["btn-retranscribe", "btn-delete"].forEach((b) => ($<HTMLButtonElement>(b).disabled = m.status === "recording"));
   $("btn-retranscribe").textContent = m.status === "recorded" ? "TRANSCRIBE" : "RE-TRANSCRIBE";
+  $("btn-archive").textContent = m.archived ? "UNARCHIVE" : "ARCHIVE";
+  $<HTMLButtonElement>("btn-archive").disabled = m.status === "recording" || m.status === "transcribing";
   $<HTMLButtonElement>("btn-trim").disabled = !m.duration_s || m.status === "recording" || m.status === "transcribing" || retrying.has(m.id);
   fix.textContent = retrying.has(m.id) ? "FIXING…" : `FIX UNCLEAR (${flagged})`;
   $("btn-follow").classList.toggle("on", follow);
@@ -1923,6 +1947,14 @@ async function init() {
   $("btn-trim").onclick = openTrim;
   wireTrim();
   $("btn-join").onclick = joinSelected;
+  $("btn-archive-sel").onclick = () => archiveMeetings([...selected], !showArchived);
+  $("btn-archived").onclick = () => { showArchived = !showArchived; selected.clear(); renderLibrary(); };
+  $("btn-archive").onclick = async () => {
+    if (!current) return;
+    const id = current.id;
+    await archiveMeetings([id], !current.archived);
+    if (current?.id === id) await openMeeting(id);
+  };
   $("btn-join-clear").onclick = () => { selected.clear(); renderLibrary(); };
   wireResultButtons();
 
