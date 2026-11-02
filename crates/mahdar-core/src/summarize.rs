@@ -8,7 +8,6 @@
 //! - `Local`: an OpenAI-compatible server on this machine, e.g. FastFlowLM
 //!   (`flm serve gemma4-it:12b`) or Ollama. Nothing leaves the laptop.
 
-use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::time::Duration;
 
@@ -356,22 +355,30 @@ pub fn test_api_key(key: &str) -> Result<String> {
     Ok(if ours.is_empty() { format!("key works ({} models)", ids.len()) } else { format!("key works · {}", ours.join(", ")) })
 }
 
+/// Add how to install the program when it couldn't be started at all.
+fn install_hint(e: anyhow::Error, hint: &str) -> anyhow::Error {
+    if e.to_string().starts_with("could not start") {
+        e.context(hint.to_string())
+    } else {
+        e
+    }
+}
+
+/// Longest a writer's command-line program may take for one reply.
+const CLI_LIMIT: Duration = Duration::from_secs(30 * 60);
+
 fn claude_cli(model: &str, prompt: &str) -> Result<String> {
     let mut cmd = Command::new("claude");
     cmd.args(["-p", "--model", model, "--output-format", "text", "--no-session-persistence"])
         .args(["--system-prompt", SYSTEM])
-        .args(["--tools", ""])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .args(["--tools", ""]);
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let mut child = cmd.spawn().context("could not start `claude`. Is Claude Code installed and on PATH?")?;
-    child.stdin.take().unwrap().write_all(prompt.as_bytes())?;
-    let out = child.wait_with_output()?;
+    let out = crate::contain::output(&mut cmd, "Claude Code", Some(prompt.to_string()), CLI_LIMIT)
+        .map_err(|e| install_hint(e, "Is Claude Code installed and on PATH?"))?;
     if !out.status.success() {
         bail!("claude failed: {}", String::from_utf8_lossy(&out.stderr).trim());
     }
@@ -442,18 +449,15 @@ fn cursor_cli_with(model: &str, prompt: &str, direct: bool) -> Result<String> {
     cmd.arg(
         "Read the file mahdar_request.md in this workspace in full and follow its instructions exactly. \
          Reply with only the requested Markdown output: no preamble, no notes about reading files.",
-    )
-    .stdin(Stdio::null())
-    .stdout(Stdio::piped())
-    .stderr(Stdio::piped());
+    );
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
     }
-    let out = cmd.output();
+    let out = crate::contain::output(&mut cmd, "Cursor", None, CLI_LIMIT);
     let _ = std::fs::remove_dir_all(&ws);
-    let out = out.context("could not start Cursor's CLI. Install it with: irm 'https://cursor.com/install?win32=true' | iex, then run `agent login`")?;
+    let out = out.map_err(|e| install_hint(e, "Install Cursor's CLI with: irm 'https://cursor.com/install?win32=true' | iex, then run `agent login`"))?;
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
