@@ -2,6 +2,7 @@
 
 pub mod asr;
 pub mod audio;
+pub mod contain;
 pub mod export;
 pub mod join;
 pub mod log;
