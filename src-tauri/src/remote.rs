@@ -544,12 +544,40 @@ fn primary_lan_ip() -> Option<std::net::IpAddr> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
-    let out = cmd.output().ok()?;
-    String::from_utf8_lossy(&out.stdout)
+    let out = output_within(&mut cmd, 5)?;
+    String::from_utf8_lossy(&out)
         .lines()
         .filter_map(|l| l.trim().parse::<std::net::Ipv4Addr>().ok())
         .find(|ip| ip.is_private())
         .map(std::net::IpAddr::V4)
+}
+
+/// A command's stdout, or None if it fails to start or runs longer than `secs` (then it is killed).
+/// PowerShell and a stuck Tailscale service can otherwise take a very long time.
+fn output_within(cmd: &mut std::process::Command, secs: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    use std::process::Stdio;
+    let mut child = cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.read_to_end(&mut buf);
+        buf
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(50)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                log::warn("phone", format!("{:?} took longer than {secs} s; skipped", cmd.get_program()));
+                return None;
+            }
+        }
+    }
+    reader.join().ok()
 }
 
 fn tailscale_exe() -> String {
@@ -565,8 +593,8 @@ fn tailscale_dns() -> Option<String> {
         use std::os::windows::process::CommandExt;
         cmd.creation_flags(0x0800_0000);
     }
-    let out = cmd.output().ok()?;
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
+    let out = output_within(&mut cmd, 5)?;
+    let v: serde_json::Value = serde_json::from_slice(&out).ok()?;
     if v["BackendState"] != "Running" {
         return None;
     }
