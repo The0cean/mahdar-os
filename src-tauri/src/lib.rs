@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use chrono::Local;
 use mahdar_core::audio::{self, Recorder};
-use mahdar_core::log;
+use mahdar_core::{join, log};
 use mahdar_core::store::{fmt_ts, ChatMsg, Meeting, MeetingSummary, Output, Settings, Status, Store};
 use mahdar_core::summarize::{self, Provider, Template};
 use mahdar_core::{Backend, Engine};
@@ -596,17 +596,55 @@ fn loaded_diarizer(state: &AppState) -> anyhow::Result<Option<std::sync::MutexGu
     Ok(Some(guard))
 }
 
-/// Background job: get PCM (decode file or use recorded samples), save audio.wav,
-/// detect speakers (when enabled), transcribe.
 /// Where a transcription's audio comes from.
 pub(crate) enum Input {
     /// An audio or video file, decoded with ffmpeg.
     File(PathBuf),
     /// A microphone recording spool (deleted once `audio.wav` is saved).
     Spool(PathBuf),
+    /// A meeting's own `audio.wav` (16 kHz mono), read without ffmpeg.
+    Wav(PathBuf),
+    /// Several recordings joined in this order. The meetings they came from are removed once
+    /// the joined audio is saved.
+    Join(Vec<JoinPart>),
 }
 
-fn spawn_transcription(app: AppHandle, id: String, input: Input) {
+pub(crate) struct JoinPart {
+    input: Input,
+    info: join::Part,
+    /// The meeting this part came from (none for a file).
+    from: Option<String>,
+}
+
+impl Input {
+    /// The audio of a meeting that isn't recording: a leftover spool first (it is only deleted
+    /// once `audio.wav` is complete), then `audio.wav`, then the original file.
+    fn of_meeting(store: &Store, m: &Meeting) -> Input {
+        let (audio, spool) = (store.audio_path(&m.id), store.recording_path(&m.id));
+        if spool.is_file() {
+            Input::Spool(spool)
+        } else if audio.is_file() {
+            Input::Wav(audio)
+        } else {
+            Input::File(PathBuf::from(&m.source))
+        }
+    }
+
+    /// 16 kHz mono PCM.
+    fn pcm(&self) -> anyhow::Result<Vec<f32>> {
+        match self {
+            Input::File(p) => audio::decode_to_pcm(p),
+            Input::Spool(p) => audio::read_spool(p),
+            Input::Wav(p) => audio::read_wav(p),
+            Input::Join(_) => anyhow::bail!("a join can't contain a join"),
+        }
+    }
+}
+
+/// Background job: get the PCM (decode a file, read a recording, or join several), save
+/// audio.wav, then (when `transcribe`) detect speakers and transcribe. Without `transcribe` the
+/// meeting is left Recorded, waiting for TRANSCRIBE.
+fn spawn_transcription(app: AppHandle, id: String, input: Input, transcribe: bool) {
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
         let emit = |stage: &str, done: usize, total: usize| {
@@ -614,12 +652,24 @@ fn spawn_transcription(app: AppHandle, id: String, input: Input) {
         };
         let title = state.store.load_meeting(&id).map(|m| m.title).unwrap_or_default();
         let t0 = Instant::now();
-        log::info("transcribe", format!("started \u{201c}{title}\u{201d}"));
-        let run = || -> anyhow::Result<()> {
-            emit("decoding", 0, 0);
-            let pcm = match &input {
-                Input::File(path) => audio::decode_to_pcm(path)?,
-                Input::Spool(path) => audio::read_spool(path)?,
+        if transcribe {
+            log::info("transcribe", format!("started \u{201c}{title}\u{201d}"));
+        }
+        let run = || -> anyhow::Result<bool> {
+            emit(if transcribe { "decoding" } else { "saving audio" }, 0, 0);
+            let (pcm, joined) = match &input {
+                Input::Join(parts) => {
+                    let mut all = Vec::new();
+                    let mut infos = Vec::new();
+                    for (i, part) in parts.iter().enumerate() {
+                        emit("joining", i, parts.len());
+                        let pcm = part.input.pcm().map_err(|e| e.context(format!("\u{201c}{}\u{201d}", part.info.title)))?;
+                        infos.push(join::Part { duration_s: pcm.len() as f64 / audio::SAMPLE_RATE as f64, ..part.info.clone() });
+                        all.extend(pcm);
+                    }
+                    (all, Some(join::merge(&infos)))
+                }
+                single => (single.pcm()?, None),
             };
             anyhow::ensure!(!pcm.is_empty(), "no audio was recorded");
             // Write the audio first, then publish the duration: the UI loads the player once duration > 0.
@@ -634,8 +684,32 @@ fn spawn_transcription(app: AppHandle, id: String, input: Input) {
             });
             let mut m = state.store.load_meeting(&id)?;
             m.duration_s = pcm.len() as f64 / audio::SAMPLE_RATE as f64;
+            if let Some((gaps, notes)) = joined {
+                m.gaps = gaps;
+                if !notes.is_empty() {
+                    m.notes = notes;
+                }
+            }
+            if !transcribe {
+                m.status = Status::Recorded;
+            }
             state.store.save_meeting(&m)?;
             let _ = app.emit("meeting-audio", id.clone());
+            if let Input::Join(parts) = &input {
+                // Everything the parts held (audio, notes, gaps) is in the joined meeting now.
+                for pid in parts.iter().filter_map(|p| p.from.as_deref()) {
+                    if busy(&state, pid).is_none() {
+                        let _ = state.store.delete_meeting(pid);
+                        brain::forget(&app, pid);
+                        let _ = app.emit("meeting-updated", pid.to_string());
+                    }
+                }
+                log::info("record", format!("joined {} parts into \u{201c}{title}\u{201d} ({})", parts.len(), fmt_ts(m.duration_s)));
+            }
+            if !transcribe {
+                log::info("record", format!("saved \u{201c}{title}\u{201d} ({}); waiting for TRANSCRIBE", fmt_ts(m.duration_s)));
+                return Ok(false);
+            }
 
             // Speakers first, so transcription chunks follow speaker turns.
             let spans = match loaded_diarizer(&state)? {
@@ -676,10 +750,10 @@ fn spawn_transcription(app: AppHandle, id: String, input: Input) {
             m.transcribe_secs = Some(secs);
             m.status = Status::Ready;
             state.store.save_meeting(&m)?;
-            Ok(())
+            Ok(true)
         };
-        let ok = match run() {
-            Ok(()) => true,
+        let transcribed = match run() {
+            Ok(t) => t,
             Err(e) => {
                 log::error("transcribe", format!("failed \u{201c}{title}\u{201d}: {e:#}"));
                 if let Ok(mut m) = state.store.load_meeting(&id) {
@@ -692,10 +766,25 @@ fn spawn_transcription(app: AppHandle, id: String, input: Input) {
         };
         clear_progress(&app, &id);
         let _ = app.emit("meeting-updated", id.clone());
-        if ok {
+        if transcribed {
             after_transcription(&app, &id);
         }
     });
+}
+
+/// Why a meeting can't be changed right now (recording, transcribing, or another job on it).
+fn busy(state: &AppState, id: &str) -> Option<&'static str> {
+    if state.recorder.lock().unwrap().as_ref().is_some_and(|(_, rid)| rid == id) {
+        return Some("is still recording");
+    }
+    if state.progress.lock().unwrap().contains_key(id) {
+        return Some("is busy");
+    }
+    match state.store.load_meeting(id).map(|m| m.status) {
+        Ok(Status::Recording) => Some("is still recording"),
+        Ok(Status::Transcribing) => Some("is being transcribed"),
+        _ => None,
+    }
 }
 
 /// Settings → Automation: write an output and/or add the meeting to the Brain once its
@@ -734,7 +823,71 @@ pub(crate) fn import_path(app: &AppHandle, p: &Path) -> CmdResult<String> {
         "import",
         format!("{} ({:.1} MB) → \u{201c}{}\u{201d}", p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(), size as f64 / 1e6, m.title),
     );
-    spawn_transcription(app.clone(), m.id.clone(), Input::File(p.to_path_buf()));
+    spawn_transcription(app.clone(), m.id.clone(), Input::File(p.to_path_buf()), true);
+    Ok(m.id)
+}
+
+/// Several files as one meeting: joined in the order of their dates (then names), transcribed.
+#[tauri::command]
+fn import_joined(app: AppHandle, paths: Vec<String>) -> CmdResult<String> {
+    let state = app.state::<AppState>();
+    if paths.len() < 2 {
+        return Err("choose at least two files to join".into());
+    }
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = paths
+        .iter()
+        .map(|p| (std::fs::metadata(p).and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH), PathBuf::from(p)))
+        .collect();
+    files.sort();
+    let name = |p: &Path| p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let title = format!("{} + {} more", name(&files[0].1), files.len() - 1);
+    let mut m = new_meeting(&state, title, format!("{} files joined", files.len()))?;
+    if let Some(first) = files.first().map(|(t, _)| *t).filter(|t| *t > std::time::UNIX_EPOCH) {
+        m.created = first.into();
+        state.store.save_meeting(&m).map_err(err)?;
+    }
+    log::info("import", format!("joining {} files \u{2192} \u{201c}{}\u{201d}", files.len(), m.title));
+    let parts = files
+        .into_iter()
+        .map(|(_, p)| JoinPart { info: join::Part { title: name(&p), ..Default::default() }, input: Input::File(p), from: None })
+        .collect();
+    spawn_transcription(app.clone(), m.id.clone(), Input::Join(parts), true);
+    Ok(m.id)
+}
+
+/// Join meetings (in recording order) into a new one, before transcribing it. The parts are
+/// removed once the joined audio is saved. Transcribes at once when Settings say to.
+#[tauri::command]
+fn join_meetings(app: AppHandle, ids: Vec<String>) -> CmdResult<String> {
+    let state = app.state::<AppState>();
+    if ids.len() < 2 {
+        return Err("choose at least two meetings to join".into());
+    }
+    let mut parts = Vec::new();
+    for id in &ids {
+        let m = state.store.load_meeting(id).map_err(err)?;
+        if let Some(why) = busy(&state, id) {
+            return Err(format!("\u{201c}{}\u{201d} {why}", m.title));
+        }
+        parts.push(m);
+    }
+    parts.sort_by_key(|m| m.created);
+    let title = parts[0].title.clone();
+    let mut m = new_meeting(&state, title, format!("{} recordings joined", parts.len()))?;
+    m.created = parts[0].created;
+    m.language = parts[0].language.clone();
+    let transcribe = state.store.load_settings().auto_transcribe;
+    state.store.save_meeting(&m).map_err(err)?;
+    log::info("record", format!("joining {} recordings \u{2192} \u{201c}{}\u{201d}", parts.len(), m.title));
+    let parts = parts
+        .into_iter()
+        .map(|p| JoinPart {
+            input: Input::of_meeting(&state.store, &p),
+            info: join::Part { title: p.title.clone(), created: Some(p.created), duration_s: p.duration_s, gaps: p.gaps.clone(), notes: p.notes.clone() },
+            from: Some(p.id),
+        })
+        .collect();
+    spawn_transcription(app.clone(), m.id.clone(), Input::Join(parts), transcribe);
     Ok(m.id)
 }
 
@@ -756,21 +909,14 @@ pub(crate) fn start_retranscribe(app: AppHandle, id: String) -> CmdResult<()> {
         if m.status == Status::Recording {
             return Err("this meeting is still recording".into());
         }
-        let (audio, spool) = (state.store.audio_path(&id), state.store.recording_path(&id));
-        let input = if audio.is_file() {
-            Input::File(audio)
-        } else if spool.is_file() {
-            Input::Spool(spool)
-        } else {
-            Input::File(PathBuf::from(&m.source))
-        };
+        let input = Input::of_meeting(&state.store, &m);
         m.status = Status::Transcribing;
         m.error = None;
         m.language = state.store.load_settings().language;
         state.store.save_meeting(&m).map_err(err)?;
         input
     };
-    spawn_transcription(app, id, input);
+    spawn_transcription(app, id, input, true);
     Ok(())
 }
 
@@ -1111,14 +1257,29 @@ fn recording_title(title: Option<String>) -> String {
 struct RecordingLevel {
     /// Peak level 0..1.
     level: f32,
-    /// Seconds of audio recorded (gaps not included).
+    /// Seconds of audio recorded (gaps and pauses not included).
     seconds: f64,
     gaps: Vec<audio::Gap>,
+    paused: bool,
 }
 
 #[tauri::command]
 fn recording_level(state: State<AppState>) -> Option<RecordingLevel> {
-    state.recorder.lock().unwrap().as_ref().map(|(r, _)| RecordingLevel { level: r.level(), seconds: r.seconds(), gaps: r.gaps() })
+    state.recorder.lock().unwrap().as_ref().map(|(r, _)| RecordingLevel {
+        level: r.level(),
+        seconds: r.seconds(),
+        gaps: r.gaps(),
+        paused: r.is_paused(),
+    })
+}
+
+/// Pause (the microphone closes; the laptop may sleep) or resume the recording.
+#[tauri::command]
+fn pause_recording(state: State<AppState>, paused: bool) -> CmdResult<()> {
+    let rec = state.recorder.lock().unwrap();
+    let (r, _) = rec.as_ref().ok_or("not recording")?;
+    r.set_paused(paused);
+    Ok(())
 }
 
 #[tauri::command]
@@ -1140,7 +1301,8 @@ fn stop_recording(app: AppHandle, state: State<AppState>, title: Option<String>,
     m.status = Status::Transcribing;
     state.store.save_meeting(&m).map_err(err)?;
     log::info("record", format!("recorded {} \u{2192} \u{201c}{}\u{201d}", fmt_ts(audio::spool_seconds(&spool)), m.title));
-    spawn_transcription(app, id.clone(), Input::Spool(spool));
+    let transcribe = state.store.load_settings().auto_transcribe;
+    spawn_transcription(app, id.clone(), Input::Spool(spool), transcribe);
     Ok(id)
 }
 
@@ -1232,7 +1394,7 @@ pub fn run() {
             }
             for (id, _) in recover {
                 let spool = app.state::<AppState>().store.recording_path(&id);
-                spawn_transcription(app.handle().clone(), id, Input::Spool(spool));
+                spawn_transcription(app.handle().clone(), id, Input::Spool(spool), s.auto_transcribe);
             }
             if watchdog_on {
                 watchdog::sync(&app.path().app_data_dir()?, true);
@@ -1275,6 +1437,9 @@ pub fn run() {
             start_recording,
             recording_level,
             stop_recording,
+            pause_recording,
+            join_meetings,
+            import_joined,
             list_templates,
             generate_output,
             delete_output,

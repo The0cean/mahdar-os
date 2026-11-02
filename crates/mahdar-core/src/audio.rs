@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, bail, Context, Result};
 
-pub use crate::store::Gap;
+pub use crate::store::{Gap, GapKind};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
 pub const SAMPLE_RATE: usize = 16_000;
@@ -187,9 +187,15 @@ impl Spool {
         }
         self.unflushed += samples.len();
         if self.unflushed >= self.rate * SPOOL_CHECKPOINT_S {
-            self.w.flush()?;
-            self.unflushed = 0;
+            self.checkpoint()?;
         }
+        Ok(())
+    }
+
+    /// Make everything written so far survive a crash.
+    fn checkpoint(&mut self) -> Result<()> {
+        self.w.flush()?;
+        self.unflushed = 0;
         Ok(())
     }
 
@@ -241,7 +247,7 @@ impl GapTracker {
     fn tick(&mut self, wall_s: f64, got_s: f64, position_s: f64, failed: bool) -> Tick {
         if !failed && got_s >= wall_s * 0.5 {
             return match self.stall.take() {
-                Some((at_s, missing_s)) if missing_s >= GAP_MIN_S => Tick::Gap(Gap { at_s, missing_s }),
+                Some((at_s, missing_s)) if missing_s >= GAP_MIN_S => Tick::Gap(Gap::lost(at_s, missing_s)),
                 _ => Tick::Ok,
             };
         }
@@ -333,22 +339,28 @@ fn open_mic(cap: &Capture) -> Result<(cpal::Stream, u32)> {
 /// Microphone recorder. Runs the cpal stream on its own thread (cpal streams are not Send on
 /// Windows) and writes the audio to a spool file as it arrives. While recording it keeps Windows
 /// awake, reopens the microphone if it stops delivering audio (e.g. after sleep), and reports
-/// the gaps that leaves.
+/// the gaps that leaves. While paused the microphone is closed and Windows may sleep.
 pub struct Recorder {
-    stop_tx: mpsc::Sender<()>,
+    cmd_tx: mpsc::Sender<Cmd>,
     thread: std::thread::JoinHandle<Result<()>>,
     level: Arc<Mutex<f32>>,
     /// Seconds of audio in the spool, as f64 bits.
     seconds: Arc<std::sync::atomic::AtomicU64>,
     gaps: Arc<Mutex<Vec<Gap>>>,
+    paused: Arc<std::sync::atomic::AtomicBool>,
+}
+
+enum Cmd {
+    Stop,
+    Pause(bool),
 }
 
 impl Recorder {
     /// Start recording into `spool` (see [`read_spool`]). `on_gap` is called from the recorder
-    /// thread when audio resumes after a gap.
+    /// thread when audio resumes after a gap or a pause.
     pub fn start(spool: &Path, on_gap: impl Fn(&Gap) + Send + 'static) -> Result<Self> {
         use std::sync::atomic::Ordering::Relaxed;
-        let (stop_tx, stop_rx) = mpsc::channel::<()>();
+        let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
         let cap = Capture { buf: Default::default(), level: Default::default(), failed: Default::default() };
         let level = cap.level.clone();
@@ -356,6 +368,8 @@ impl Recorder {
         let seconds_w = seconds.clone();
         let gaps = Arc::new(Mutex::new(Vec::new()));
         let gaps_w = gaps.clone();
+        let paused = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let paused_w = paused.clone();
         let spool = spool.to_path_buf();
 
         let thread = std::thread::spawn(move || -> Result<()> {
@@ -371,37 +385,82 @@ impl Recorder {
                     return Err(anyhow!(msg));
                 }
             };
-            let _awake = StayAwake::new();
+            // Held while recording; dropped (Windows may sleep) while paused.
+            let mut _awake = Some(StayAwake::new());
             let mut stream = Some(stream);
             let mut written = 0usize;
             let mut tracker = GapTracker::default();
             // Wall-clock time, so time spent asleep counts.
             let mut last = std::time::SystemTime::now();
             let mut next_reopen = 0.0f64;
-            // Move the captured audio to disk twice a second until told to stop.
+            // Some(real seconds so far) while paused.
+            let mut paused_for: Option<f64> = None;
+            // Move the captured audio to disk twice a second (or at once on a command) until told to stop.
             loop {
-                let stop = !matches!(
-                    stop_rx.recv_timeout(std::time::Duration::from_millis(500)),
-                    Err(mpsc::RecvTimeoutError::Timeout)
-                );
+                let (stop, pause) = match cmd_rx.recv_timeout(std::time::Duration::from_millis(500)) {
+                    Err(mpsc::RecvTimeoutError::Timeout) => (false, None),
+                    Ok(Cmd::Pause(p)) => (false, Some(p)),
+                    Ok(Cmd::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => (true, None),
+                };
                 if stop {
                     drop(stream.take()); // ends the callbacks, so the buffer is final
                 }
                 let samples = std::mem::take(&mut *cap.buf.lock().unwrap());
-                let got_s = samples.len() as f64 / mic_rate as f64;
-                let samples =
-                    if mic_rate as usize == file.rate { samples } else { resample_linear(&samples, mic_rate as usize, file.rate) };
-                file.push(&samples)?;
-                written += samples.len();
-                let position_s = written as f64 / file.rate as f64;
-                seconds_w.store(position_s.to_bits(), Relaxed);
-                if stop {
-                    return file.finish();
-                }
-
                 let now = std::time::SystemTime::now();
                 let wall_s = now.duration_since(last).map(|d| d.as_secs_f64()).unwrap_or(0.0);
                 last = now;
+                let got_s = samples.len() as f64 / mic_rate as f64;
+                if let Some(p) = paused_for.as_mut() {
+                    *p += wall_s; // nothing is captured while paused
+                } else {
+                    let samples =
+                        if mic_rate as usize == file.rate { samples } else { resample_linear(&samples, mic_rate as usize, file.rate) };
+                    file.push(&samples)?;
+                    written += samples.len();
+                    seconds_w.store((written as f64 / file.rate as f64).to_bits(), Relaxed);
+                }
+                if stop {
+                    return file.finish();
+                }
+                let position_s = written as f64 / file.rate as f64;
+
+                if pause == Some(true) && paused_for.is_none() {
+                    // Close the microphone and let Windows sleep until RESUME.
+                    file.checkpoint()?;
+                    drop(stream.take());
+                    cap.buf.lock().unwrap().clear();
+                    *cap.level.lock().unwrap() = 0.0;
+                    _awake = None;
+                    paused_for = Some(0.0);
+                    paused_w.store(true, Relaxed);
+                    crate::log::info("record", format!("paused at {}", crate::store::fmt_ts(position_s)));
+                    continue;
+                }
+                if pause == Some(false) {
+                    if let Some(missing_s) = paused_for.take() {
+                        let gap = Gap { at_s: position_s, missing_s, kind: GapKind::Paused };
+                        crate::log::info("record", format!("resumed after {}", crate::store::fmt_ts(missing_s)));
+                        on_gap(&gap);
+                        gaps_w.lock().unwrap().push(gap);
+                        _awake = Some(StayAwake::new());
+                        tracker = GapTracker::default();
+                        next_reopen = 0.0;
+                        cap.failed.store(false, Relaxed);
+                        match open_mic(&cap) {
+                            Ok((s, rate)) => {
+                                stream = Some(s);
+                                mic_rate = rate;
+                            }
+                            // No audio arrives, so the stall check below keeps retrying.
+                            Err(e) => crate::log::warn("record", format!("microphone not back after the pause: {e:#}")),
+                        }
+                        paused_w.store(false, Relaxed);
+                        continue;
+                    }
+                }
+                if paused_for.is_some() {
+                    continue;
+                }
                 match tracker.tick(wall_s, got_s, position_s, cap.failed.swap(false, Relaxed)) {
                     Tick::Ok => next_reopen = 0.0,
                     Tick::Gap(gap) => {
@@ -432,7 +491,16 @@ impl Recorder {
         });
 
         ready_rx.recv().map_err(|_| anyhow!("recorder thread died"))??;
-        Ok(Recorder { stop_tx, thread, level, seconds, gaps })
+        Ok(Recorder { cmd_tx, thread, level, seconds, gaps, paused })
+    }
+
+    /// Pause (closes the microphone) or resume. Resuming leaves a pause marker in the recording.
+    pub fn set_paused(&self, paused: bool) {
+        let _ = self.cmd_tx.send(Cmd::Pause(paused));
+    }
+
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Latest peak level 0..1, for a live meter.
@@ -452,7 +520,7 @@ impl Recorder {
 
     /// Stop and close the spool file.
     pub fn stop(self) -> Result<()> {
-        let _ = self.stop_tx.send(());
+        let _ = self.cmd_tx.send(Cmd::Stop);
         self.thread.join().map_err(|_| anyhow!("recorder thread panicked"))?
     }
 }
@@ -512,13 +580,13 @@ mod tests {
         assert_eq!(t.tick(0.5, 0.8, 11.0, false), Tick::Ok);
         // Laptop asleep for 3 minutes: one long tick with no audio, then audio again.
         assert_eq!(t.tick(180.0, 0.1, 11.1, false), Tick::Stalled);
-        assert_eq!(t.tick(0.5, 0.5, 11.6, false), Tick::Gap(Gap { at_s: 11.1, missing_s: 179.9 }));
+        assert_eq!(t.tick(0.5, 0.5, 11.6, false), Tick::Gap(Gap::lost(11.1, 179.9)));
         // Microphone goes quiet: reopen after 3 s, gap reported once audio is back.
         for i in 0..5 {
             assert_eq!(t.tick(0.5, 0.0, 20.0, false), Tick::Ok, "tick {i}");
         }
         assert_eq!(t.tick(0.5, 0.0, 20.0, false), Tick::Stalled);
-        assert_eq!(t.tick(0.5, 0.5, 20.5, false), Tick::Gap(Gap { at_s: 20.0, missing_s: 3.0 }));
+        assert_eq!(t.tick(0.5, 0.5, 20.5, false), Tick::Gap(Gap::lost(20.0, 3.0)));
         // An error reopens at once; a short hiccup is not a gap.
         assert_eq!(t.tick(0.5, 0.4, 30.0, true), Tick::Stalled);
         assert_eq!(t.tick(0.5, 0.5, 30.5, false), Tick::Ok);

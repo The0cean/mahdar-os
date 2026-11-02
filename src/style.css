@@ -168,6 +168,12 @@ button.sys-badge { cursor: pointer; } button.sys-badge:hover { border-color: var
 .tag.err { color: var(--red); border-color: var(--red); }
 .tag.ok { color: var(--green); border-color: var(--green); }
 .tag.ready { background: var(--green); border-color: var(--green); color: #fff; }
+.tag.rec { color: var(--orange); border-color: var(--orange); }
+.dtable td.sel-col, .dtable th.sel-col { width: 28px; padding-right: 0; }
+.dtable td.sel-col input { cursor: pointer; accent-color: var(--accent); margin: 0; vertical-align: middle; }
+.dtable tbody tr.sel td { background: color-mix(in srgb, var(--accent) 7%, var(--bg)); }
+.join-bar { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.join-bar .field-note { margin: 0; white-space: nowrap; }
 .empty-row td { text-align: center; font-family: var(--mono); font-size: 11px; color: var(--text4); padding: 28px; cursor: default; }
 .setup-warning { margin-top: 20px; border: 1px solid var(--orange); padding: 12px 16px; font-family: var(--mono); font-size: 11px; line-height: 1.8; color: var(--text2); }
 
@@ -383,5 +389,13 @@ mark { background: var(--accent); color: #fff; padding: 0 2px; }
 .n-pline b { font-weight: 600; color: var(--text3); }
 #rec-notes { resize: vertical; font-family: var(--mono); font-size: 12px; line-height: 1.6; unicode-bidi: plaintext; }
 .gap-line { font-family: var(--mono); font-size: 11px; color: var(--orange); padding: 8px 20px; border-bottom: 1px dashed var(--orange); background: color-mix(in srgb, var(--orange) 8%, var(--bg)); }
+.gap-line.paused, .gap-line.joined { color: var(--text4); border-bottom-color: var(--border); background: var(--bg); }
+.rec-actions { display: flex; gap: 8px; }
+.rec-actions .hbtn { flex: 0 0 auto; padding: 0 16px; }
+.rec-actions .go-btn { flex: 1; }
+#rec-overlay.paused .rec-card .heading { color: var(--text4); animation: none; }
+#rec-overlay.paused .rec-time { opacity: .45; }
+.t-empty .go-btn { display: block; width: auto; margin: 14px auto 8px; padding: 10px 32px; }
+.t-empty .t-hint { display: block; }
 #rec-gaps:empty { display: none; }
 #rec-gaps { margin: 0 0 12px; }

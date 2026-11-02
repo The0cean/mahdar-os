@@ -471,7 +471,7 @@ function renderList() {
   $("rows").innerHTML = ms.length ? ms.map((m) => {
     const p = progress[m.id];
     const tag = p ? `<span class="tag live">${p.total ? Math.round((100 * p.done) / p.total) + "%" : "WORKING"}</span>`
-      : m.status === "recording" ? '<span class="tag live">REC</span>' : m.status === "transcribing" ? '<span class="tag live">WORKING</span>' : m.status === "failed" ? '<span class="tag err">FAILED</span>'
+      : m.status === "recording" ? '<span class="tag live">REC</span>' : m.status === "recorded" ? '<span class="tag">RECORDED</span>' : m.status === "transcribing" ? '<span class="tag live">WORKING</span>' : m.status === "failed" ? '<span class="tag err">FAILED</span>'
       : m.n_outputs ? `<span class="tag ok">${m.n_outputs} OUT</span>` : '<span class="tag ready">READY</span>';
     return `<button class="row" data-id="${m.id}"><div class="t"><div class="name" dir="auto">${esc(m.title)}</div><div class="meta">${when(m.created)}${m.duration_s ? " · " + ts(m.duration_s) : ""}</div></div>${tag}</button>`;
   }).join("") : `<div class="empty">// ${q ? "no matches" : "no meetings yet<br>// tap RECORD to start"}</div>`;
@@ -542,7 +542,7 @@ function renderSub() { if (!current) return; if (sub === "minutes") renderMinute
 function renderProgress() {
   if (!current) return;
   const p = progress[current.id];
-  const busyText = { decoding: "Decoding audio", "detecting speakers": "Detecting speakers", "loading model": "Loading speech model", transcribing: "Transcribing", retrying: "Fixing unclear parts", writing: "Writing", "starting local model": "Starting local model (~35 s)" };
+  const busyText = { decoding: "Decoding audio", joining: "Joining recordings", "saving audio": "Saving audio", "detecting speakers": "Detecting speakers", "loading model": "Loading speech model", transcribing: "Transcribing", retrying: "Fixing unclear parts", writing: "Writing", "starting local model": "Starting local model (~35 s)" };
   const box = $("progress");
   if (!p && !(current && current.status === "transcribing")) { box.classList.add("hidden"); return; }
   box.classList.remove("hidden");
@@ -556,6 +556,7 @@ function renderProgress() {
 function renderMinutes() {
   const m = current, box = $("s-minutes");
   if (m.status === "failed") { box.innerHTML = `<div class="empty">// failed: ${esc(m.error || "")}<br><br></div><div class="section"><button class="btn ghost" id="m-retx">RE-TRANSCRIBE</button></div>`; $("m-retx").onclick = retranscribe; return; }
+  if (m.status === "recorded") { box.innerHTML = '<div class="empty">// recorded on your laptop, not transcribed yet<br><br></div><div class="section"><button class="btn" id="m-retx">TRANSCRIBE</button></div>'; $("m-retx").onclick = transcribeNow; return; }
   if (m.status !== "ready") { box.innerHTML = '<div class="empty">// transcribing on your laptop…<br>// this page updates by itself</div>'; return; }
   const pv = providerValue(settings.provider);
   let html = `<div class="section">
@@ -607,7 +608,7 @@ async function generate() {
 
 function renderTranscript() {
   const m = current, box = $("s-transcript");
-  if (!m.chunks.length) { box.innerHTML = `<div class="empty">// ${m.status === "transcribing" ? "transcribing on your laptop…" : "no transcript"}</div>`; return; }
+  if (!m.chunks.length) { box.innerHTML = `<div class="empty">// ${m.status === "transcribing" ? "transcribing on your laptop…" : m.status === "recorded" ? "not transcribed yet: TRANSCRIBE is under Minutes" : "no transcript"}</div>`; return; }
   const flagged = m.chunks.filter((c) => c.flag).length;
   const hasSpk = nSpk(m) > 0;
   let prev;
@@ -703,6 +704,10 @@ function speakersOverview() {
 
 async function runRetry(indices) {
   try { await post(`/api/meetings/${current.id}/retry`, { indices }); toast(indices ? "Re-running this part…" : "Fixing unclear parts…"); progress[current.id] = { id: current.id, stage: "retrying", done: 0, total: indices ? 1 : 0 }; current._wasBusy = true; renderProgress(); schedulePoll(1500); }
+  catch (e) { toast(e.message, true); }
+}
+async function transcribeNow() {
+  try { await post(`/api/meetings/${current.id}/retranscribe`); current.status = "transcribing"; current._wasBusy = true; renderSub(); renderProgress(); schedulePoll(1500); }
   catch (e) { toast(e.message, true); }
 }
 async function retranscribe() {

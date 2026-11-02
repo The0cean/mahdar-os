@@ -62,10 +62,15 @@
 
           <div class="section-title list-title">
             <span>Meetings</span>
+            <div id="join-bar" class="join-bar hidden">
+              <span id="join-count" class="field-note"></span>
+              <button id="btn-join" class="hbtn accent" title="Join the ticked recordings into one meeting, in recording order">JOIN INTO ONE</button>
+              <button id="btn-join-clear" class="hbtn">CLEAR</button>
+            </div>
             <input id="search" class="hsearch" placeholder="// search" />
           </div>
           <table class="dtable">
-            <thead><tr><th class="num-col">#</th><th>Title</th><th>Date</th><th class="r">Length</th><th class="r">Outputs</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th class="sel-col" title="Tick recordings to join them"></th><th class="num-col">#</th><th>Title</th><th>Date</th><th class="r">Length</th><th class="r">Outputs</th><th>Status</th><th></th></tr></thead>
             <tbody id="meeting-rows"></tbody>
           </table>
           <div id="setup-warning" class="setup-warning hidden"></div>
@@ -335,13 +340,17 @@
             <section class="s-group" id="set-automation">
               <div class="section-title">Automation</div>
               <div class="export-card">
+                <div class="field"><label>A1 / Transcribe a recording when it stops</label>
+                  <div class="fmt-row" id="s-auto-transcribe"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
+                </div>
+                <div class="field-note">// OFF: a recording is saved as RECORDED and waits for TRANSCRIBE, so you can join parts first (tick them in the Library, then JOIN INTO ONE) or keep the laptop free until later. Imported files are still transcribed straight away.</div>
                 <div class="field-row">
-                  <div class="field"><label>A1 / After transcription, write</label><select id="s-auto-output"></select></div>
-                  <div class="field"><label>A2 / Add to the Brain</label>
+                  <div class="field"><label>A2 / After transcription, write</label><select id="s-auto-output"></select></div>
+                  <div class="field"><label>A3 / Add to the Brain</label>
                     <div class="fmt-row" id="s-auto-index"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
                   </div>
                 </div>
-                <div class="field-note">// Runs by itself when a transcript is ready, including recordings from the watch folder and the phone. Uses the engines chosen in Writing and Brain.</div>
+                <div class="field-note">// A2 and A3 run by themselves when a transcript is ready, including recordings from the watch folder and the phone. They use the engines chosen in Writing and Brain.</div>
               </div>
             </section>
 
@@ -418,14 +427,17 @@
 
     <div id="rec-overlay" class="overlay hidden">
       <div class="rec-card">
-        <div class="heading">● Recording</div>
+        <div class="heading" id="rec-heading">● Recording</div>
         <div id="rec-time" class="rec-time">00:00</div>
         <div class="tl-bar big"><div class="tl-fill" id="rec-level"></div></div>
         <div class="field"><label>Title</label><input id="rec-title" placeholder="// optional" /></div>
         <div class="field"><label>Notes</label><textarea id="rec-notes" rows="7" dir="auto" spellcheck="false" placeholder="// type as you go: each new line gets the recording time"></textarea></div>
         <div id="rec-gaps" class="field-note warn"></div>
-        <button id="btn-stop" class="go-btn">STOP &amp; TRANSCRIBE</button>
-        <div class="field-note">// audio stays on this laptop, saved as it records<br>// the laptop stays awake while recording: keep the lid open</div>
+        <div class="rec-actions">
+          <button id="btn-pause" class="hbtn" title="Pause: the microphone turns off until you resume">❚❚ PAUSE</button>
+          <button id="btn-stop" class="go-btn">STOP &amp; TRANSCRIBE</button>
+        </div>
+        <div class="field-note">// audio stays on this laptop, saved as it records<br>// the laptop stays awake while recording: keep the lid open (paused, it may sleep)</div>
       </div>
     </div>
 
