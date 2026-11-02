@@ -1,5 +1,6 @@
 mod brain;
 mod remote;
+mod taskbar;
 mod watch;
 pub mod watchdog;
 mod update;
@@ -766,6 +767,7 @@ fn spawn_transcription(app: AppHandle, id: String, input: Input, transcribe: boo
         };
         clear_progress(&app, &id);
         let _ = app.emit("meeting-updated", id.clone());
+        taskbar::flash(&app);
         if transcribed {
             after_transcription(&app, &id);
         }
@@ -1413,6 +1415,7 @@ pub fn run() {
             });
             restart_remote(app.handle());
             update::spawn(app.handle().clone());
+            taskbar::spawn(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
