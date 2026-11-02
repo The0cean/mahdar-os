@@ -391,6 +391,23 @@ mark { background: var(--accent); color: #fff; padding: 0 2px; }
 .gap-line { font-family: var(--mono); font-size: 11px; color: var(--orange); padding: 8px 20px; border-bottom: 1px dashed var(--orange); background: color-mix(in srgb, var(--orange) 8%, var(--bg)); }
 .gap-line.paused, .gap-line.joined { color: var(--text4); border-bottom-color: var(--border); background: var(--bg); }
 .rec-actions { display: flex; gap: 8px; }
+.trim-card { width: min(900px, calc(100vw - 48px)); background: var(--bg); border: 1px solid var(--text); padding: 24px 28px; box-shadow: 8px 8px 0 var(--text); }
+.trim-card .heading { font-family: var(--mono); font-size: 10px; color: var(--text4); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 12px; }
+.tr-wave { position: relative; height: 110px; border: 1px solid var(--border); cursor: crosshair; user-select: none; }
+.tr-wave canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.tr-sel { position: absolute; top: 0; bottom: 0; background: color-mix(in srgb, var(--accent) 22%, transparent); border-left: 1px solid var(--accent); border-right: 1px solid var(--accent); pointer-events: none; }
+.tr-head { position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px solid var(--accent); pointer-events: none; }
+.tr-hover { position: absolute; top: -18px; transform: translateX(-50%); font-family: var(--mono); font-size: 10px; color: var(--text3); pointer-events: none; white-space: nowrap; }
+.tr-row { display: flex; align-items: center; gap: 8px; margin: 12px 0; flex-wrap: wrap; }
+.tr-now { font-family: var(--mono); font-size: 13px; font-variant-numeric: tabular-nums; min-width: 64px; }
+.tr-cuts { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.tr-cuts:empty { display: none; }
+.tr-cut { font-family: var(--mono); font-size: 11px; border: 1px solid var(--red); color: var(--red); padding: 2px 4px 2px 8px; display: inline-flex; gap: 6px; align-items: center; }
+.tr-cut button { border: none; background: none; color: inherit; cursor: pointer; font: inherit; padding: 0 4px; }
+.tr-actions { display: flex; gap: 8px; align-items: center; margin: 12px 0 8px; }
+.tr-actions .grow { flex: 1; }
+.tr-actions .go-btn { width: auto; padding: 10px 28px; }
+.gap-line.cut { color: var(--text4); border-bottom-color: var(--border); background: var(--bg); }
 .rec-actions .hbtn { flex: 0 0 auto; padding: 0 16px; }
 .rec-actions .go-btn { flex: 1; }
 #rec-overlay.paused .rec-card .heading { color: var(--text4); animation: none; }

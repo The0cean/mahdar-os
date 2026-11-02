@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use chrono::Local;
 use mahdar_core::audio::{self, Recorder};
-use mahdar_core::{join, log};
+use mahdar_core::{join, log, trim};
 use mahdar_core::store::{fmt_ts, ChatMsg, Meeting, MeetingSummary, Output, Settings, Status, Store};
 use mahdar_core::summarize::{self, Provider, Template};
 use mahdar_core::{Backend, Engine};
@@ -510,6 +510,7 @@ fn new_meeting(state: &AppState, title: String, source: String) -> CmdResult<Mee
         chat: Vec::new(),
         notes: String::new(),
         gaps: Vec::new(),
+        trimmed_s: 0.0,
     };
     state.store.save_meeting(&m).map_err(err)?;
     Ok(m)
@@ -1232,6 +1233,126 @@ fn recording_level(state: State<AppState>) -> Option<RecordingLevel> {
     })
 }
 
+// ---------- trimming ----------
+
+/// The meeting's waveform as `n` peaks (0..1), for the trim editor.
+#[tauri::command]
+async fn audio_peaks(app: AppHandle, id: String, n: usize) -> CmdResult<Vec<f32>> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let pcm = audio::read_wav(&app.state::<AppState>().store.audio_path(&id)).map_err(err)?;
+        Ok(audio::peaks(&pcm, n.clamp(10, 4000)))
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Cut parts (start, end, or the middle) out of a meeting's audio. The transcript, gaps and
+/// note stamps follow. The first trim keeps the original audio and transcript for RESTORE ORIGINAL.
+#[tauri::command]
+async fn trim_meeting(app: AppHandle, id: String, cuts: Vec<(f64, f64)>) -> CmdResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        if let Some(why) = busy(&state, &id) {
+            return Err(format!("this meeting {why}"));
+        }
+        let mut m = state.store.load_meeting(&id).map_err(err)?;
+        let wav = state.store.audio_path(&id);
+        let pcm = audio::read_wav(&wav).map_err(|e| format!("no audio to trim: {e:#}"))?;
+        let duration = pcm.len() as f64 / audio::SAMPLE_RATE as f64;
+        let cuts = trim::normalize(&cuts, duration);
+        let removed: f64 = cuts.iter().map(|(a, b)| b - a).sum();
+        if cuts.is_empty() {
+            return Err("nothing to cut".into());
+        }
+        if duration - removed < 1.0 {
+            return Err("that would cut the whole recording".into());
+        }
+        let (original, backup_path) = (state.store.original_audio_path(&id), state.store.trim_backup_path(&id));
+        let mut backup = match std::fs::read(&backup_path) {
+            Ok(b) => serde_json::from_slice::<trim::Backup>(&b).map_err(err)?,
+            Err(_) => {
+                // First trim: keep the original audio and what the meeting had.
+                std::fs::copy(&wav, &original).map_err(err)?;
+                trim::Backup::of(&m)
+            }
+        };
+        m.duration_s = duration;
+        trim::apply(&mut m, &cuts);
+        backup.notes_after = m.notes.clone();
+        std::fs::write(&backup_path, serde_json::to_vec(&backup).map_err(err)?).map_err(err)?;
+        // Write next to it, then swap, so a failure leaves the old audio in place.
+        let next = wav.with_file_name("audio.trimmed.wav");
+        audio::write_wav(&next, &trim::pcm(&pcm, audio::SAMPLE_RATE, &cuts)).map_err(err)?;
+        replace_file(&next, &wav).map_err(|e| {
+            let _ = std::fs::remove_file(&next);
+            format!("could not replace the audio: {e}")
+        })?;
+        state.store.save_meeting(&m).map_err(err)?;
+        log::info("trim", format!("\u{201c}{}\u{201d}: cut {} in {} part{} \u{2192} {}", m.title, fmt_ts(removed), cuts.len(), if cuts.len() == 1 { "" } else { "s" }, fmt_ts(m.duration_s)));
+        refresh_phone_copy(&wav);
+        let _ = app.emit("meeting-audio", id.clone());
+        let _ = app.emit("meeting-updated", id);
+        Ok(())
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Undo every trim: the original audio, transcript and gaps come back (and the notes, unless
+/// they were edited since).
+#[tauri::command]
+async fn restore_original(app: AppHandle, id: String) -> CmdResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        if let Some(why) = busy(&state, &id) {
+            return Err(format!("this meeting {why}"));
+        }
+        let (wav, original, backup_path) = (state.store.audio_path(&id), state.store.original_audio_path(&id), state.store.trim_backup_path(&id));
+        let backup: trim::Backup = std::fs::read(&backup_path)
+            .map_err(|_| "the original isn't kept for this meeting".to_string())
+            .and_then(|b| serde_json::from_slice(&b).map_err(err))?;
+        if !original.is_file() {
+            return Err("the original audio is missing".into());
+        }
+        replace_file(&original, &wav).map_err(|e| format!("could not put the original back: {e}"))?;
+        let mut m = state.store.load_meeting(&id).map_err(err)?;
+        backup.restore(&mut m);
+        state.store.save_meeting(&m).map_err(err)?;
+        let _ = std::fs::remove_file(&backup_path);
+        log::info("trim", format!("\u{201c}{}\u{201d}: original restored ({})", m.title, fmt_ts(m.duration_s)));
+        refresh_phone_copy(&wav);
+        let _ = app.emit("meeting-audio", id.clone());
+        let _ = app.emit("meeting-updated", id);
+        Ok(())
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Move `from` over `to`. The player may still hold `to` open for a moment: retry briefly.
+fn replace_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    let mut tries = 0;
+    loop {
+        match std::fs::rename(from, to) {
+            Err(e) if tries < 10 => {
+                tries += 1;
+                log::warn("trim", format!("audio busy ({e}); retrying"));
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
+            r => return r,
+        }
+    }
+}
+
+/// Make the phone's copy again after the audio changed (in the background).
+fn refresh_phone_copy(wav: &Path) {
+    let _ = std::fs::remove_file(wav.with_file_name("audio-phone.m4a"));
+    let wav = wav.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = audio::phone_copy(&wav);
+    });
+}
+
 /// Pause (the microphone closes; the laptop may sleep) or resume the recording.
 #[tauri::command]
 fn pause_recording(state: State<AppState>, paused: bool) -> CmdResult<()> {
@@ -1395,6 +1516,9 @@ pub fn run() {
             recording_level,
             stop_recording,
             pause_recording,
+            audio_peaks,
+            trim_meeting,
+            restore_original,
             join_meetings,
             import_joined,
             list_templates,

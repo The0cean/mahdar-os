@@ -50,6 +50,11 @@ pub fn merge(parts: &[Part]) -> (Vec<Gap>, String) {
 
 /// Move a leading `[mm:ss]` / `[h:mm:ss]` stamp (as typed while recording) by `by_s` seconds.
 fn shift_stamp(line: &str, by_s: f64) -> String {
+    restamp(line, |t| t + by_s)
+}
+
+/// Replace a leading `[mm:ss]` / `[h:mm:ss]` stamp with `to(its seconds)`.
+pub(crate) fn restamp(line: &str, to: impl Fn(f64) -> f64) -> String {
     let body = line.trim_start();
     let indent = &line[..line.len() - body.len()];
     let Some(close) = body.strip_prefix('[').and_then(|r| r.find(']')) else { return line.to_string() };
@@ -60,7 +65,7 @@ fn shift_stamp(line: &str, by_s: f64) -> String {
         Some([h, m, s]) if *m < 60 && *s < 60 => h * 3600 + m * 60 + s,
         _ => return line.to_string(),
     };
-    format!("{indent}[{}]{}", fmt_ts(secs as f64 + by_s), &body[close + 2..])
+    format!("{indent}[{}]{}", fmt_ts(to(secs as f64)), &body[close + 2..])
 }
 
 #[cfg(test)]

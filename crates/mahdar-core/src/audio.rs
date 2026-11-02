@@ -109,6 +109,19 @@ pub fn quiet_point(pcm: &[f32], lo: usize, hi: usize) -> usize {
     best
 }
 
+/// Loudest sample in each of `n` equal slices, 0..1: a waveform to draw.
+pub fn peaks(pcm: &[f32], n: usize) -> Vec<f32> {
+    if pcm.is_empty() || n == 0 {
+        return Vec::new();
+    }
+    (0..n)
+        .map(|i| {
+            let (a, b) = (i * pcm.len() / n, ((i + 1) * pcm.len() / n).max(i * pcm.len() / n + 1).min(pcm.len()));
+            pcm[a..b].iter().fold(0f32, |m, s| m.max(s.abs()))
+        })
+        .collect()
+}
+
 /// Read a WAV written by `write_wav` back into f32 PCM.
 pub fn read_wav(path: &Path) -> Result<Vec<f32>> {
     let mut r = hound::WavReader::open(path).with_context(|| format!("could not open {}", path.display()))?;
