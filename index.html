@@ -93,6 +93,7 @@
               <button id="btn-follow" class="hbtn" title="Scroll the transcript with the audio">FOLLOW</button>
               <button id="btn-export-transcript" class="hbtn" title="Save the transcript as a Word document">WORD</button>
               <button id="btn-brain-index" class="hbtn" title="Add this meeting to the Brain (search + tags across meetings)">BRAIN</button>
+              <button id="btn-trim" class="hbtn" title="Cut the start, the end or parts in the middle">TRIM</button>
               <button id="btn-retranscribe" class="hbtn">RE-TRANSCRIBE</button>
               <button id="btn-delete" class="hbtn danger">DELETE</button>
             </div>
@@ -438,6 +439,38 @@
           <button id="btn-stop" class="go-btn">STOP &amp; TRANSCRIBE</button>
         </div>
         <div class="field-note">// audio stays on this laptop, saved as it records<br>// the laptop stays awake while recording: keep the lid open (paused, it may sleep)</div>
+      </div>
+    </div>
+
+    <div id="trim-overlay" class="overlay hidden">
+      <div class="trim-card">
+        <div class="heading">✂ Trim recording · <span id="tr-total"></span></div>
+        <div class="tr-wave" id="tr-wave">
+          <canvas id="tr-canvas"></canvas>
+          <div id="tr-sel" class="tr-sel hidden"></div>
+          <div id="tr-head" class="tr-head"></div>
+          <div id="tr-hover" class="tr-hover hidden"></div>
+        </div>
+        <div class="tr-row">
+          <button id="tr-play" class="hbtn">▶ PLAY</button>
+          <span id="tr-now" class="tr-now">00:00</span>
+          <button id="tr-set-start" class="hbtn" title="The trimmed recording starts at the play position">START HERE</button>
+          <button id="tr-set-end" class="hbtn" title="The trimmed recording ends at the play position">END HERE</button>
+          <button id="tr-cut" class="hbtn danger" disabled title="Cut the selected part out">CUT SELECTION</button>
+        </div>
+        <div class="field-row">
+          <div class="field"><label>Start</label><input id="tr-start" spellcheck="false" /></div>
+          <div class="field"><label>End</label><input id="tr-end" spellcheck="false" /></div>
+        </div>
+        <div id="tr-cuts" class="tr-cuts"></div>
+        <div id="tr-summary" class="field-note"></div>
+        <div class="tr-actions">
+          <button id="tr-restore" class="hbtn hidden" title="Undo every trim of this meeting">RESTORE ORIGINAL</button>
+          <span class="grow"></span>
+          <button id="tr-cancel" class="hbtn">CANCEL</button>
+          <button id="tr-apply" class="go-btn">APPLY TRIM</button>
+        </div>
+        <div class="field-note">// click the waveform to listen from there · drag to select a part to cut · playback skips what will be cut</div>
       </div>
     </div>
 

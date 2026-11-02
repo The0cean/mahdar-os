@@ -23,9 +23,9 @@ interface Output { id: string; template_id: string; template_name: string; provi
 interface Meeting {
   id: string; title: string; created: string; source: string; duration_s: number; language: string;
   status: Status; error: string | null; transcribe_secs: number | null; chunks: Chunk[]; outputs: Output[];
-  speakers: Record<string, string>; chat: ChatMsg[]; notes: string; gaps?: Gap[];
+  speakers: Record<string, string>; chat: ChatMsg[]; notes: string; gaps?: Gap[]; trimmed_s?: number;
 }
-interface Gap { at_s: number; missing_s: number; kind?: "lost" | "paused" | "joined" }
+interface Gap { at_s: number; missing_s: number; kind?: "lost" | "paused" | "joined" | "cut" }
 interface MeetingSummary { id: string; title: string; created: string; duration_s: number; status: Status; n_outputs: number }
 interface Template { id: string; name: string; prompt: string; builtin: boolean }
 type Provider =
@@ -669,10 +669,12 @@ function saveRecNotesSoon() {
 }
 const span = (s: number) => s >= 60 ? `${Math.round(s / 60)} min` : `${Math.round(s)} s`;
 const gapText = (g: Gap) => g.kind === "paused" ? `paused for ${span(g.missing_s)}`
+  : g.kind === "cut" ? `${span(g.missing_s)} cut out here`
   : g.kind === "joined" ? `next recording${g.missing_s >= 1 ? `, ${span(g.missing_s)} later` : ""}`
   : `${span(g.missing_s)} not recorded (laptop asleep or microphone lost)`;
-const gapIcon = (g: Gap) => (g.kind === "paused" ? "‖" : g.kind === "joined" ? "+" : "⚠");
+const gapIcon = (g: Gap) => (g.kind === "paused" ? "‖" : g.kind === "joined" ? "+" : g.kind === "cut" ? "✂" : "⚠");
 const gapTitle = (g: Gap) => g.kind === "paused" ? "You paused the recording here" : g.kind === "joined" ? "Two recordings were joined here"
+  : g.kind === "cut" ? "A part was trimmed out here"
   : "Nothing was captured here; the audio continues right after";
 
 async function stopRecording() {
@@ -726,7 +728,8 @@ function loadAudio() {
   }
   invoke<string>("audio_path", { id: m.id }).then((p) => {
     if (current?.id !== m.id) return;
-    a.src = convertFileSrc(p);
+    // The query changes when a trim changes the file, so the webview doesn't play a cached copy.
+    a.src = `${convertFileSrc(p)}?v=${m.duration_s}-${m.trimmed_s ?? 0}`;
     a.load();
   });
 }
@@ -752,7 +755,7 @@ function renderMeeting() {
   const title = $<HTMLInputElement>("m-title");
   if (document.activeElement !== title) title.value = m.title;
   const parts = m.chunks.length;
-  $("m-info").textContent = [m.duration_s ? ts(m.duration_s) : "", parts ? `${parts} parts` : "", m.language === "ar" ? "AR+EN" : "EN"].filter(Boolean).join(" · ");
+  $("m-info").textContent = [m.duration_s ? ts(m.duration_s) : "", m.trimmed_s ? `trimmed ${ts(m.trimmed_s)}` : "", parts ? `${parts} parts` : "", m.language === "ar" ? "AR+EN" : "EN"].filter(Boolean).join(" · ");
   const flagged = m.chunks.filter((c) => c.flag).length;
   $("m-flags").textContent = flagged ? `${flagged} unclear` : "";
   $("m-flags").title = flagged ? "The model got stuck on these parts (⚠). Text there may be cut short." : "";
@@ -761,6 +764,7 @@ function renderMeeting() {
   fix.disabled = retrying.has(m.id) || m.status !== "ready";
   ["btn-retranscribe", "btn-delete"].forEach((b) => ($<HTMLButtonElement>(b).disabled = m.status === "recording"));
   $("btn-retranscribe").textContent = m.status === "recorded" ? "TRANSCRIBE" : "RE-TRANSCRIBE";
+  $<HTMLButtonElement>("btn-trim").disabled = !m.duration_s || m.status === "recording" || m.status === "transcribing" || retrying.has(m.id);
   fix.textContent = retrying.has(m.id) ? "FIXING…" : `FIX UNCLEAR (${flagged})`;
   $("btn-follow").classList.toggle("on", follow);
   renderTranscript();
@@ -779,7 +783,8 @@ function renderTranscript() {
     box.innerHTML = m.status === "recorded"
       ? `<div class="t-empty">// recorded, not transcribed yet${m.gaps?.length ? ` · ${m.gaps.length} break${m.gaps.length > 1 ? "s" : ""}` : ""}
           <button id="t-transcribe" class="go-btn">TRANSCRIBE</button>
-          <span class="t-hint">// to join it with other parts first: tick them in 01 Library, then JOIN</span></div>`
+          <span class="t-hint">// first, TRIM cuts the start, the end or parts in the middle</span>
+          <span class="t-hint">// to join it with other parts: tick them in 01 Library, then JOIN</span></div>`
       : `<div class="t-empty">${m.status === "recording" ? "// recording: the transcript starts when you press STOP" : m.status === "transcribing" ? "// transcribing: text appears when done" : m.status === "failed" ? "// transcription failed: see the timeline →" : "// no transcript"}</div>`;
     $("t-transcribe")?.addEventListener("click", () => transcribeCurrent());
     return;
@@ -1332,6 +1337,233 @@ function stampRecNotes(e: InputEvent) {
   box.setRangeText(`[${ts(recElapsed)}] ${e.data}`, lineStart, b, "end");
 }
 
+// ───────── trimming ─────────
+const trimmer = { open: false, dur: 0, start: 0, end: 0, cuts: [] as [number, number][], sel: null as [number, number] | null, peaks: [] as number[], raf: 0 };
+
+/** "mm:ss", "h:mm:ss" or seconds → seconds; NaN when unreadable. */
+function parseTs(v: string): number {
+  const parts = v.trim().split(":").map(Number);
+  if (!parts.length || parts.some((n) => !isFinite(n) || n < 0)) return NaN;
+  return parts.reduce((a, n) => a * 60 + n, 0);
+}
+
+/** Everything that will be removed, sorted and merged: before START, the cuts, after END. */
+function trimCuts(): [number, number][] {
+  const t = trimmer;
+  const all: [number, number][] = [...(t.start > 0 ? [[0, t.start] as [number, number]] : []), ...t.cuts, ...(t.end < t.dur ? [[t.end, t.dur] as [number, number]] : [])];
+  all.sort((a, b) => a[0] - b[0]);
+  const out: [number, number][] = [];
+  for (const [a, b] of all) {
+    const last = out[out.length - 1];
+    if (last && a <= last[1]) last[1] = Math.max(last[1], b);
+    else out.push([a, b]);
+  }
+  return out.filter(([a, b]) => b - a >= 0.1);
+}
+
+async function openTrim() {
+  const m = current;
+  if (!m || !m.duration_s) return;
+  audio().pause();
+  Object.assign(trimmer, { open: true, dur: m.duration_s, start: 0, end: m.duration_s, cuts: [], sel: null, peaks: [] });
+  $("tr-total").textContent = `${m.title} · ${ts(m.duration_s)}`;
+  const restore = $<HTMLButtonElement>("tr-restore");
+  restore.classList.toggle("hidden", !m.trimmed_s);
+  restore.textContent = `RESTORE ORIGINAL (+${ts(m.trimmed_s ?? 0)})`;
+  $("trim-overlay").classList.remove("hidden");
+  renderTrim();
+  trimLoop();
+  try {
+    trimmer.peaks = await invoke<number[]>("audio_peaks", { id: m.id, n: Math.round($("tr-wave").clientWidth) || 800 });
+    drawTrim();
+  } catch (e) { toast(String(e), true); }
+}
+
+function closeTrim() {
+  trimmer.open = false;
+  cancelAnimationFrame(trimmer.raf);
+  audio().pause();
+  $("trim-overlay").classList.add("hidden");
+}
+
+function renderTrim() {
+  const t = trimmer;
+  if (document.activeElement !== $("tr-start")) $<HTMLInputElement>("tr-start").value = ts(t.start);
+  if (document.activeElement !== $("tr-end")) $<HTMLInputElement>("tr-end").value = ts(t.end);
+  $("tr-cuts").innerHTML = t.cuts.map(([a, b], i) => `<span class="tr-cut">✂ ${ts(a)} – ${ts(b)} · ${ts(b - a)}<button data-i="${i}" title="Keep this part">×</button></span>`).join("");
+  $("tr-cuts").querySelectorAll<HTMLButtonElement>("button").forEach((b) => (b.onclick = () => { t.cuts.splice(Number(b.dataset.i), 1); renderTrim(); }));
+  const cuts = trimCuts();
+  const removed = cuts.reduce((a, [x, y]) => a + y - x, 0);
+  const m = current!;
+  const lost = m.chunks.filter((c) => cuts.some(([a, b]) => (c.start_s + c.end_s) / 2 > a && (c.start_s + c.end_s) / 2 < b)).length;
+  $("tr-summary").textContent = removed
+    ? `// keeps ${ts(t.dur - removed)} of ${ts(t.dur)} · cuts ${ts(removed)}${m.chunks.length ? ` · ${lost} transcript line${lost === 1 ? "" : "s"} dropped, the rest keep their place` : ""}`
+    : "// nothing to cut yet: set START / END, or select a part on the waveform";
+  $<HTMLButtonElement>("tr-apply").disabled = !removed;
+  $<HTMLButtonElement>("tr-cut").disabled = !t.sel;
+  const sel = $("tr-sel");
+  sel.classList.toggle("hidden", !t.sel);
+  if (t.sel) {
+    sel.style.left = `${(100 * t.sel[0]) / t.dur}%`;
+    sel.style.width = `${(100 * (t.sel[1] - t.sel[0])) / t.dur}%`;
+  }
+  drawTrim();
+}
+
+function drawTrim() {
+  const t = trimmer;
+  const c = $<HTMLCanvasElement>("tr-canvas");
+  const w = c.clientWidth, h = c.clientHeight, dpr = window.devicePixelRatio || 1;
+  if (!w) return;
+  c.width = Math.round(w * dpr);
+  c.height = Math.round(h * dpr);
+  const g = c.getContext("2d")!;
+  g.scale(dpr, dpr);
+  const css = getComputedStyle(document.documentElement);
+  const keep = css.getPropertyValue("--text").trim() || "#000", cut = css.getPropertyValue("--red").trim() || "#d33";
+  const cuts = trimCuts();
+  for (const [a, b] of cuts) {
+    g.fillStyle = cut;
+    g.globalAlpha = 0.12;
+    g.fillRect((a / t.dur) * w, 0, ((b - a) / t.dur) * w, h);
+  }
+  g.globalAlpha = 1;
+  const n = t.peaks.length;
+  for (let x = 0; x < w; x++) {
+    const p = n ? t.peaks[Math.min(n - 1, Math.floor((x / w) * n))] : 0;
+    const sec = ((x + 0.5) / w) * t.dur;
+    const isCut = cuts.some(([a, b]) => sec > a && sec < b);
+    g.fillStyle = isCut ? cut : keep;
+    g.globalAlpha = isCut ? 0.45 : 0.85;
+    const bh = Math.max(1, Math.sqrt(p) * (h - 8));
+    g.fillRect(x, (h - bh) / 2, 1, bh);
+  }
+  g.globalAlpha = 1;
+}
+
+/** While the editor is open: move the playhead, and skip what will be cut. */
+function trimLoop() {
+  const a = audio();
+  const t = trimmer;
+  if (!t.open) return;
+  const now = a.currentTime || 0;
+  if (!a.paused) {
+    if (now < t.start - 0.05) a.currentTime = t.start;
+    else if (now >= t.end) { a.pause(); a.currentTime = t.end; }
+    else {
+      const inCut = t.cuts.find(([x, y]) => now >= x && now < y);
+      if (inCut) a.currentTime = inCut[1];
+    }
+  }
+  $("tr-head").style.left = `${(100 * now) / (t.dur || 1)}%`;
+  $("tr-now").textContent = ts(now);
+  $("tr-play").textContent = a.paused ? "▶ PLAY" : "❚❚ PAUSE";
+  t.raf = requestAnimationFrame(trimLoop);
+}
+
+function wireTrim() {
+  const wave = $("tr-wave");
+  const at = (e: MouseEvent) => {
+    const r = wave.getBoundingClientRect();
+    return Math.min(trimmer.dur, Math.max(0, ((e.clientX - r.left) / r.width) * trimmer.dur));
+  };
+  let down: { x: number; t: number } | null = null;
+  wave.onmousedown = (e) => { down = { x: e.clientX, t: at(e) }; };
+  wave.onmousemove = (e) => {
+    const hover = $("tr-hover");
+    hover.classList.remove("hidden");
+    hover.style.left = `${e.clientX - wave.getBoundingClientRect().left}px`;
+    hover.textContent = ts(at(e));
+    if (down && Math.abs(e.clientX - down.x) > 4) {
+      const t = at(e);
+      trimmer.sel = [Math.min(down.t, t), Math.max(down.t, t)];
+      renderTrim();
+    }
+  };
+  wave.onmouseleave = () => $("tr-hover").classList.add("hidden");
+  window.addEventListener("mouseup", (e) => {
+    if (!down) return;
+    const moved = Math.abs(e.clientX - down.x) > 4;
+    if (!moved) {
+      trimmer.sel = null;
+      seek(down.t);
+      renderTrim();
+    }
+    down = null;
+  });
+  $("tr-play").onclick = () => {
+    const a = audio();
+    if (!a.src) return toast("Audio not available yet", true);
+    if (a.paused) {
+      if (a.currentTime >= trimmer.end || a.currentTime < trimmer.start) a.currentTime = trimmer.start;
+      a.play().catch((e) => toast(`Can't play audio: ${e}`, true));
+    } else a.pause();
+  };
+  $("tr-set-start").onclick = () => {
+    const now = audio().currentTime || 0;
+    if (now >= trimmer.end - 1) return toast("START must be before END", true);
+    trimmer.start = now;
+    renderTrim();
+  };
+  $("tr-set-end").onclick = () => {
+    const now = audio().currentTime || 0;
+    if (now <= trimmer.start + 1) return toast("END must be after START", true);
+    trimmer.end = now;
+    renderTrim();
+  };
+  const typed = (id: "tr-start" | "tr-end") => () => {
+    const v = parseTs($<HTMLInputElement>(id).value);
+    if (isNaN(v)) return toast("Type a time like 03:15 or 1:02:30", true);
+    if (id === "tr-start") trimmer.start = Math.min(Math.max(0, v), trimmer.end - 1);
+    else trimmer.end = Math.max(Math.min(trimmer.dur, v), trimmer.start + 1);
+    renderTrim();
+  };
+  $("tr-start").onchange = typed("tr-start");
+  $("tr-end").onchange = typed("tr-end");
+  $("tr-cut").onclick = () => {
+    if (!trimmer.sel) return;
+    trimmer.cuts.push(trimmer.sel);
+    trimmer.cuts.sort((a, b) => a[0] - b[0]);
+    trimmer.sel = null;
+    renderTrim();
+  };
+  $("tr-cancel").onclick = closeTrim;
+  $("tr-apply").onclick = async () => {
+    const m = current;
+    if (!m) return;
+    const cuts = trimCuts();
+    const removed = cuts.reduce((a, [x, y]) => a + y - x, 0);
+    const extra = m.chunks.length ? " The transcript follows: lines in the cut parts are dropped. Outputs already written stay as they are." : "";
+    if (!(await askDialog(`Cut ${ts(removed)} from “${m.title}”, leaving ${ts(trimmer.dur - removed)}?${extra}\n\nThe original is kept: RESTORE ORIGINAL undoes it.`, { title: "Trim", kind: "warning", okLabel: "TRIM", cancelLabel: "Cancel" }))) return;
+    closeTrim();
+    const a = audio();
+    a.removeAttribute("src"); // release the file so it can be replaced
+    a.load();
+    try {
+      await invoke("trim_meeting", { id: m.id, cuts });
+      toast(`Trimmed: cut ${ts(removed)}`);
+    } catch (e) { toast(String(e), true); }
+    await openMeeting(m.id);
+  };
+  $("tr-restore").onclick = async () => {
+    const m = current;
+    if (!m || !(await askDialog(`Put back the original recording of “${m.title}” (${ts(m.duration_s + (m.trimmed_s ?? 0))}) and its transcript as it was before trimming?`, { title: "Restore original", kind: "warning", okLabel: "RESTORE", cancelLabel: "Cancel" }))) return;
+    closeTrim();
+    const a = audio();
+    a.removeAttribute("src");
+    a.load();
+    try {
+      await invoke("restore_original", { id: m.id });
+      toast("Original restored");
+    } catch (e) { toast(String(e), true); }
+    await openMeeting(m.id);
+  };
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && trimmer.open) closeTrim();
+  });
+  window.addEventListener("resize", () => { if (trimmer.open) drawTrim(); });
+}
+
 // ───────── player ─────────
 function seek(t: number, play = false) {
   const a = audio();
@@ -1693,6 +1925,8 @@ async function init() {
     await transcribeCurrent();
   };
   $("btn-pause").onclick = togglePause;
+  $("btn-trim").onclick = openTrim;
+  wireTrim();
   $("btn-join").onclick = joinSelected;
   $("btn-join-clear").onclick = () => { selected.clear(); renderLibrary(); };
   wireResultButtons();
@@ -1719,7 +1953,7 @@ async function init() {
       e.preventDefault();
       a.paused ? a.play() : a.pause();
     }
-    if (e.code === "KeyM" && !e.ctrlKey && !e.metaKey && !e.altKey && !typing && $("v-meeting").classList.contains("active") && current) {
+    if (e.code === "KeyM" && !e.ctrlKey && !e.metaKey && !e.altKey && !typing && !trimmer.open && $("v-meeting").classList.contains("active") && current) {
       e.preventDefault();
       stampNote(false);
     }

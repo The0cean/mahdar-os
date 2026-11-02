@@ -69,6 +69,8 @@ pub enum GapKind {
     Paused,
     /// The next of several joined recordings starts here.
     Joined,
+    /// A part was cut out of the recording here.
+    Cut,
 }
 
 impl Gap {
@@ -83,6 +85,7 @@ impl Gap {
             GapKind::Paused => format!("(recording paused for {})", fmt_ts(self.missing_s)),
             GapKind::Joined if self.missing_s >= 1.0 => format!("(next recording part, {} later)", fmt_ts(self.missing_s)),
             GapKind::Joined => "(next recording part)".into(),
+            GapKind::Cut => format!("(part cut out: {})", fmt_ts(self.missing_s)),
         }
     }
 }
@@ -127,6 +130,10 @@ pub struct Meeting {
     /// Parts of a recording that were not captured.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gaps: Vec<Gap>,
+    /// Seconds cut out by trimming (0 = never trimmed). The original audio is kept until
+    /// RESTORE ORIGINAL or the meeting is deleted.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub trimmed_s: f64,
 }
 
 impl Meeting {
@@ -254,6 +261,10 @@ fn default_template() -> String {
     "mom".into()
 }
 
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
+}
+
 fn yes() -> bool {
     true
 }
@@ -327,6 +338,16 @@ impl Store {
 
     /// The microphone recording as it is written (see `audio::read_spool`); removed once
     /// `audio.wav` is saved.
+    /// The audio as it was before the first trim.
+    pub fn original_audio_path(&self, id: &str) -> PathBuf {
+        self.meeting_dir(id).join("audio-original.wav")
+    }
+
+    /// Transcript, gaps and notes as they were before the first trim.
+    pub fn trim_backup_path(&self, id: &str) -> PathBuf {
+        self.meeting_dir(id).join("trim-backup.json")
+    }
+
     pub fn recording_path(&self, id: &str) -> PathBuf {
         self.meeting_dir(id).join("recording.wav")
     }
