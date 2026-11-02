@@ -47,13 +47,44 @@ pub struct Output {
     pub text: String,
 }
 
-/// A stretch of a recording where no audio was captured (laptop asleep, microphone lost).
+/// A break in a recording: no audio was captured (laptop asleep, microphone lost), the user
+/// paused, or two recordings were joined there.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Gap {
     /// Position in the audio where it happened.
     pub at_s: f64,
-    /// Real time that went unrecorded.
+    /// Real time that went unrecorded (0 when unknown, e.g. between joined files).
     pub missing_s: f64,
+    #[serde(default)]
+    pub kind: GapKind,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GapKind {
+    /// Audio was lost: the laptop slept or the microphone stopped.
+    #[default]
+    Lost,
+    /// The user paused the recording.
+    Paused,
+    /// The next of several joined recordings starts here.
+    Joined,
+}
+
+impl Gap {
+    pub fn lost(at_s: f64, missing_s: f64) -> Self {
+        Gap { at_s, missing_s, kind: GapKind::Lost }
+    }
+
+    /// How the transcript marks it, e.g. "(recording paused for 03:05)".
+    pub fn label(&self) -> String {
+        match self.kind {
+            GapKind::Lost => format!("(recording gap: {} not recorded)", fmt_ts(self.missing_s)),
+            GapKind::Paused => format!("(recording paused for {})", fmt_ts(self.missing_s)),
+            GapKind::Joined if self.missing_s >= 1.0 => format!("(next recording part, {} later)", fmt_ts(self.missing_s)),
+            GapKind::Joined => "(next recording part)".into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -61,6 +92,8 @@ pub struct Gap {
 pub enum Status {
     /// The microphone is recording into `recording.wav`.
     Recording,
+    /// Audio saved, waiting for TRANSCRIBE (automatic transcription is off, or a join).
+    Recorded,
     Transcribing,
     Ready,
     Failed,
@@ -106,13 +139,18 @@ impl Meeting {
         self.transcript_between(0.0, f64::INFINITY)
     }
 
-    /// Transcript lines that overlap `from_s..to_s`, in the same format. A gap in the
-    /// recording is marked before the line it falls in.
+    /// Transcript lines that overlap `from_s..to_s`, in the same format. A break in the
+    /// recording (gap, pause, join) is marked before the line it falls in, or the next one.
     pub fn transcript_between(&self, from_s: f64, to_s: f64) -> String {
         let mut lines = Vec::new();
-        for c in self.chunks.iter().filter(|c| c.end_s > from_s && c.start_s < to_s) {
-            for g in self.gaps.iter().filter(|g| g.at_s >= c.start_s && g.at_s < c.end_s) {
-                lines.push(format!("[{}] (recording gap: {} not recorded)", fmt_ts(g.at_s), fmt_ts(g.missing_s)));
+        let mut prev_end = f64::NEG_INFINITY;
+        for c in &self.chunks {
+            let after = std::mem::replace(&mut prev_end, c.end_s);
+            if c.end_s <= from_s || c.start_s >= to_s {
+                continue;
+            }
+            for g in self.gaps.iter().filter(|g| g.at_s >= after && g.at_s < c.end_s) {
+                lines.push(format!("[{}] {}", fmt_ts(g.at_s), g.label()));
             }
             let t = crate::asr::clean_text(&c.text);
             if t.is_empty() {
@@ -195,6 +233,10 @@ pub struct Settings {
     /// Download new versions in the background and offer to install them.
     #[serde(default = "yes")]
     pub auto_update: bool,
+    /// Transcribe a recording as soon as it stops. Off: it is saved as Recorded and waits for
+    /// TRANSCRIBE (to join parts first, or to keep the laptop free).
+    #[serde(default = "yes")]
+    pub auto_transcribe: bool,
 }
 
 impl Settings {
@@ -239,6 +281,7 @@ impl Settings {
             auto_index: false,
             local: LocalOptions::default(),
             auto_update: true,
+            auto_transcribe: true,
         }
     }
 }
@@ -402,7 +445,19 @@ mod tests {
         assert_eq!(m.transcript_between(90.0, 210.0).lines().count(), 3);
         assert_eq!(m.transcript_text().lines().count(), 3);
         let mut m = m;
-        m.gaps.push(Gap { at_s: 150.0, missing_s: 185.0 });
+        m.gaps.push(Gap::lost(150.0, 185.0));
         assert_eq!(m.transcript_between(120.0, 150.0), "[02:30] (recording gap: 03:05 not recorded)\n[01:40] Speaker 1: price is 40");
+        // Pauses and joins; one that falls between two lines goes before the next line.
+        m.chunks[2].start_s = 210.0;
+        m.gaps.push(Gap { at_s: 205.0, missing_s: 0.0, kind: GapKind::Joined });
+        m.gaps.push(Gap { at_s: 20.0, missing_s: 65.0, kind: GapKind::Paused });
+        assert_eq!(
+            m.transcript_text(),
+            "[00:20] (recording paused for 01:05)\n[00:00] hello\n[02:30] (recording gap: 03:05 not recorded)\n\
+             [01:40] Speaker 1: price is 40\n[03:25] (next recording part)\n[03:30] bye"
+        );
+        // Old meetings: gaps without a kind were lost audio.
+        let g: Gap = serde_json::from_str(r#"{"at_s":1,"missing_s":2}"#).unwrap();
+        assert_eq!(g.kind, GapKind::Lost);
     }
 }

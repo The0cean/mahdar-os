@@ -16,7 +16,7 @@ import { open, save, ask as askDialog } from "@tauri-apps/plugin-dialog";
 import { marked } from "marked";
 
 // ───────── types (mirror mahdar-core) ─────────
-type Status = "recording" | "transcribing" | "ready" | "failed";
+type Status = "recording" | "recorded" | "transcribing" | "ready" | "failed";
 interface Chunk { start_s: number; end_s: number; text: string; flag: string; speaker: number | null; edited: boolean }
 interface ChatMsg { role: "user" | "assistant"; text: string; created: string; provider: string }
 interface Output { id: string; template_id: string; template_name: string; provider: string; created: string; text: string }
@@ -25,7 +25,7 @@ interface Meeting {
   status: Status; error: string | null; transcribe_secs: number | null; chunks: Chunk[]; outputs: Output[];
   speakers: Record<string, string>; chat: ChatMsg[]; notes: string; gaps?: Gap[];
 }
-interface Gap { at_s: number; missing_s: number }
+interface Gap { at_s: number; missing_s: number; kind?: "lost" | "paused" | "joined" }
 interface MeetingSummary { id: string; title: string; created: string; duration_s: number; status: Status; n_outputs: number }
 interface Template { id: string; name: string; prompt: string; builtin: boolean }
 type Provider =
@@ -41,7 +41,7 @@ interface Settings {
   brain_provider: Provider | null;
   default_template: string; auto_output: string; auto_index: boolean;
   local: { temperature: number; context: number; autostart: boolean; timeout_min: number };
-  auto_update: boolean;
+  auto_update: boolean; auto_transcribe: boolean;
 }
 interface UpdateInfo {
   current: string; state: string; version: string; notes: string; date: string; percent: number;
@@ -522,15 +522,27 @@ function renderLibrary() {
   $("meeting-rows").innerHTML = rows.length
     ? rows.map((m, i) => {
         const pr = progress.get(m.id);
-        const tag = retrying.has(m.id) ? `<span class="tag live">FIXING</span>` : m.status === "recording" ? `<span class="tag live">● REC</span>` : m.status === "transcribing"
-          ? `<span class="tag live">${pr && pr.total ? `${Math.round((100 * pr.done) / pr.total)}%` : "QUEUED"}</span>`
+        const tag = retrying.has(m.id) ? `<span class="tag live">FIXING</span>` : m.status === "recording" ? `<span class="tag live">● REC</span>`
+          : m.status === "recorded" ? `<span class="tag rec" title="Not transcribed yet">RECORDED</span>` : m.status === "transcribing"
+          ? `<span class="tag live">${pr?.stage === "joining" ? "JOINING" : pr?.stage === "saving audio" ? "SAVING" : pr && pr.total ? `${Math.round((100 * pr.done) / pr.total)}%` : "QUEUED"}</span>`
           : m.status === "failed" ? `<span class="tag err">FAILED</span>` : `<span class="tag ${m.n_outputs ? "ok" : "ready"}">READY</span>`;
-        return `<tr data-id="${m.id}"><td class="num-col">${pad(rows.length - i)}</td><td class="t" dir="auto">${esc(m.title)}</td>
+        return `<tr data-id="${m.id}"${selected.has(m.id) ? ` class="sel"` : ""}><td class="sel-col"><input type="checkbox" class="row-sel" title="Select to join" ${selected.has(m.id) ? "checked" : ""}></td><td class="num-col">${pad(rows.length - i)}</td><td class="t" dir="auto">${esc(m.title)}</td>
           <td class="mono">${dateStr(m.created)}</td><td class="r">${m.duration_s ? ts(m.duration_s) : "—"}</td>
           <td class="r">${m.n_outputs || "—"}</td><td>${tag}</td><td class="link">OPEN →</td></tr>`;
       }).join("")
-    : `<tr class="empty-row"><td colspan="7">${q ? "// no matches" : "// no meetings yet: drop a recording above"}</td></tr>`;
-  $("meeting-rows").querySelectorAll<HTMLTableRowElement>("tr[data-id]").forEach((r) => (r.onclick = () => openMeeting(r.dataset.id!)));
+    : `<tr class="empty-row"><td colspan="8">${q ? "// no matches" : "// no meetings yet: drop a recording above"}</td></tr>`;
+  $("meeting-rows").querySelectorAll<HTMLTableRowElement>("tr[data-id]").forEach((r) => {
+    r.onclick = (e) => {
+      const box = r.querySelector<HTMLInputElement>(".row-sel")!;
+      if ((e.target as HTMLElement).closest(".sel-col")) {
+        if (e.target !== box) box.checked = !box.checked;
+        if (box.checked) selected.add(r.dataset.id!); else selected.delete(r.dataset.id!);
+        r.classList.toggle("sel", box.checked);
+        renderJoinBar();
+      } else openMeeting(r.dataset.id!);
+    };
+  });
+  renderJoinBar();
 
   const warn: string[] = [];
   if (!status.model_present) warn.push("// speech model missing: click DOWNLOAD under System (2.4 GB, one time)");
@@ -539,9 +551,46 @@ function renderLibrary() {
   $("setup-warning").classList.toggle("hidden", !warn.length);
 }
 
+// ───────── joining recordings ─────────
+/** Meetings ticked in the Library, to join into one. */
+const selected = new Set<string>();
+
+function renderJoinBar() {
+  for (const id of selected) if (!meetings.some((m) => m.id === id)) selected.delete(id);
+  const picked = meetings.filter((m) => selected.has(m.id));
+  const busy = picked.find((m) => m.status === "recording" || m.status === "transcribing");
+  $("join-bar").classList.toggle("hidden", !picked.length);
+  $("join-count").textContent = busy ? `// wait for “${busy.title}” to finish` : picked.length < 2 ? "// tick another recording to join" : `${picked.length} selected · ${ts(picked.reduce((a, m) => a + m.duration_s, 0))}`;
+  $<HTMLButtonElement>("btn-join").disabled = picked.length < 2 || !!busy;
+}
+
+async function joinSelected() {
+  const parts = meetings.filter((m) => selected.has(m.id)).sort((a, b) => a.created.localeCompare(b.created));
+  if (parts.length < 2) return;
+  const lost = parts.some((m) => m.n_outputs > 0) ? "\n\nTheir outputs and chats are not kept." : "";
+  const next = settings.auto_transcribe ? "It is transcribed right away." : "It waits for TRANSCRIBE (Settings → Automation).";
+  const list = parts.map((m, i) => `${i + 1}. ${m.title} · ${m.duration_s ? ts(m.duration_s) : "—"}`).join("\n");
+  if (!(await askDialog(`Join these into one meeting, in this order?\n\n${list}\n\nThe parts are replaced by the joined meeting. ${next}${lost}`, { title: "Join recordings", kind: "info", okLabel: "JOIN", cancelLabel: "Cancel" }))) return;
+  try {
+    const id = await invoke<string>("join_meetings", { ids: parts.map((m) => m.id) });
+    selected.clear();
+    toast(`Joining ${parts.length} recordings…`);
+    await refreshLibrary();
+    await openMeeting(id);
+  } catch (e) { toast(String(e), true); }
+}
+
 async function importPaths(paths: string[]) {
   const ok = paths.filter((p) => AUDIO_EXT.includes(p.split(".").pop()!.toLowerCase()));
   if (paths.length && !ok.length) return toast("Not an audio/video file", true);
+  if (ok.length > 1 && await askDialog(`${ok.length} recordings. Join them into one meeting (in the order they were recorded), or import each as its own meeting?`,
+    { title: "Import", kind: "info", okLabel: "JOIN INTO ONE", cancelLabel: "SEPARATE" })) {
+    try {
+      const id = await invoke<string>("import_joined", { paths: ok });
+      toast(`Joining ${ok.length} recordings, then transcribing…`);
+      return await openMeeting(id);
+    } catch (e) { return toast(String(e), true); }
+  }
   let last = "";
   for (const path of ok) {
     try { last = await invoke<string>("import_audio", { path }); } catch (e) { toast(String(e), true); }
@@ -577,22 +626,38 @@ let recTimer = 0;
 let recElapsed = 0;
 let recId = "";
 let recNotesTimer = 0;
+let recPaused = false;
 async function startRecording() {
   const title = $<HTMLInputElement>("rec-title-quick").value;
   try { recId = await invoke<string>("start_recording", { title }); } catch (e) { return toast(String(e), true); }
   $<HTMLInputElement>("rec-title").value = title;
   recElapsed = 0;
+  showPaused(false);
+  $("btn-stop").textContent = settings.auto_transcribe ? "STOP & TRANSCRIBE" : "STOP & SAVE";
   refreshLibrary();
   $("rec-overlay").classList.remove("hidden");
   $("rec-notes").focus();
   recTimer = window.setInterval(async () => {
-    const r = await invoke<{ level: number; seconds: number; gaps: Gap[] } | null>("recording_level");
+    const r = await invoke<{ level: number; seconds: number; gaps: Gap[]; paused: boolean } | null>("recording_level");
     if (!r) return;
     recElapsed = r.seconds;
     $("rec-time").textContent = ts(r.seconds);
     $("rec-level").style.width = `${Math.min(100, Math.sqrt(r.level) * 100)}%`;
-    $("rec-gaps").innerHTML = r.gaps.map((g) => `⚠ ${gapText(g)} at ${ts(g.at_s)}. Recording continued.`).join("<br>");
+    if (r.paused !== recPaused) showPaused(r.paused);
+    $("rec-gaps").innerHTML = r.gaps.filter((g) => (g.kind ?? "lost") === "lost").map((g) => `⚠ ${gapText(g)} at ${ts(g.at_s)}. Recording continued.`).join("<br>");
   }, 120);
+}
+function showPaused(paused: boolean) {
+  recPaused = paused;
+  $("rec-overlay").classList.toggle("paused", paused);
+  $("rec-heading").textContent = paused ? "❚❚ Paused · the microphone is off" : "● Recording";
+  $("btn-pause").textContent = paused ? "▶ RESUME" : "❚❚ PAUSE";
+}
+async function togglePause() {
+  const paused = !recPaused;
+  showPaused(paused); // the poll confirms it
+  try { await invoke("pause_recording", { paused }); } catch (e) { toast(String(e), true); }
+  $("rec-notes").focus();
 }
 /** Recording notes go to disk as you type, so a crash doesn't lose them. */
 function saveRecNotesSoon() {
@@ -602,10 +667,17 @@ function saveRecNotesSoon() {
     if (recId) invoke("save_notes", { id: recId, notes: $<HTMLTextAreaElement>("rec-notes").value }).catch(() => { /* saved again on stop */ });
   }, 1500);
 }
-const gapText = (g: Gap) => `${g.missing_s >= 60 ? `${Math.round(g.missing_s / 60)} min` : `${Math.round(g.missing_s)} s`} not recorded (laptop asleep or microphone lost)`;
+const span = (s: number) => s >= 60 ? `${Math.round(s / 60)} min` : `${Math.round(s)} s`;
+const gapText = (g: Gap) => g.kind === "paused" ? `paused for ${span(g.missing_s)}`
+  : g.kind === "joined" ? `next recording${g.missing_s >= 1 ? `, ${span(g.missing_s)} later` : ""}`
+  : `${span(g.missing_s)} not recorded (laptop asleep or microphone lost)`;
+const gapIcon = (g: Gap) => (g.kind === "paused" ? "‖" : g.kind === "joined" ? "+" : "⚠");
+const gapTitle = (g: Gap) => g.kind === "paused" ? "You paused the recording here" : g.kind === "joined" ? "Two recordings were joined here"
+  : "Nothing was captured here; the audio continues right after";
 
 async function stopRecording() {
   clearInterval(recTimer);
+  showPaused(false);
   $("rec-gaps").innerHTML = "";
   clearTimeout(recNotesTimer);
   recId = "";
@@ -649,7 +721,7 @@ function loadAudio() {
   updatePlayer();
   const m = current;
   if (!m || m.duration_s <= 0) {
-    $("p-msg").textContent = m?.status === "transcribing" ? "// preparing audio…" : m?.status === "recording" ? "// recording…" : "";
+    $("p-msg").textContent = m?.status === "transcribing" || m?.status === "recorded" ? "// preparing audio…" : m?.status === "recording" ? "// recording…" : "";
     return;
   }
   invoke<string>("audio_path", { id: m.id }).then((p) => {
@@ -657,6 +729,20 @@ function loadAudio() {
     a.src = convertFileSrc(p);
     a.load();
   });
+}
+
+async function transcribeCurrent() {
+  if (!current) return;
+  try { await invoke("retranscribe", { id: current.id }); await openMeeting(current.id); } catch (e) { toast(String(e), true); }
+}
+
+function closeMeeting() {
+  audio().pause();
+  audio().removeAttribute("src");
+  current = null;
+  $("meeting-layout").classList.add("hidden");
+  $("no-meeting").classList.remove("hidden");
+  showView("library");
 }
 
 function renderMeeting() {
@@ -674,6 +760,7 @@ function renderMeeting() {
   fix.classList.toggle("hidden", !flagged && !retrying.has(m.id));
   fix.disabled = retrying.has(m.id) || m.status !== "ready";
   ["btn-retranscribe", "btn-delete"].forEach((b) => ($<HTMLButtonElement>(b).disabled = m.status === "recording"));
+  $("btn-retranscribe").textContent = m.status === "recorded" ? "TRANSCRIBE" : "RE-TRANSCRIBE";
   fix.textContent = retrying.has(m.id) ? "FIXING…" : `FIX UNCLEAR (${flagged})`;
   $("btn-follow").classList.toggle("on", follow);
   renderTranscript();
@@ -689,7 +776,12 @@ function renderTranscript() {
   const q = $<HTMLInputElement>("t-search").value.trim();
   const box = $("transcript");
   if (!m.chunks.length) {
-    box.innerHTML = `<div class="t-empty">${m.status === "recording" ? "// recording: the transcript starts when you press STOP" : m.status === "transcribing" ? "// transcribing: text appears when done" : m.status === "failed" ? "// transcription failed: see the timeline →" : "// no transcript"}</div>`;
+    box.innerHTML = m.status === "recorded"
+      ? `<div class="t-empty">// recorded, not transcribed yet${m.gaps?.length ? ` · ${m.gaps.length} break${m.gaps.length > 1 ? "s" : ""}` : ""}
+          <button id="t-transcribe" class="go-btn">TRANSCRIBE</button>
+          <span class="t-hint">// to join it with other parts first: tick them in 01 Library, then JOIN</span></div>`
+      : `<div class="t-empty">${m.status === "recording" ? "// recording: the transcript starts when you press STOP" : m.status === "transcribing" ? "// transcribing: text appears when done" : m.status === "failed" ? "// transcription failed: see the timeline →" : "// no transcript"}</div>`;
+    $("t-transcribe")?.addEventListener("click", () => transcribeCurrent());
     return;
   }
   const hasSpk = m.chunks.some((c) => c.speaker);
@@ -711,8 +803,10 @@ function renderTranscript() {
       const spk = !hasSpk ? "" : same ? `<span></span>` : c.speaker
         ? `<button class="spk s${c.speaker}" data-i="${i}" title="Name this speaker or reassign the line">${esc(spkName(m, c.speaker))}</button>`
         : `<button class="spk none" data-i="${i}">—</button>`;
-      const gaps = q ? "" : (m.gaps ?? []).filter((g) => g.at_s >= c.start_s && g.at_s < c.end_s)
-        .map((g) => `<div class="gap-line" title="Nothing was captured here; the audio continues right after">⚠ ${ts(g.at_s)} · ${gapText(g)}</div>`).join("");
+      // A break goes before the line it falls in, or the next line when it falls between two.
+      const after = i > 0 ? m.chunks[i - 1].end_s : -Infinity;
+      const gaps = q ? "" : (m.gaps ?? []).filter((g) => g.at_s >= after && g.at_s < c.end_s)
+        .map((g) => `<div class="gap-line ${g.kind ?? "lost"}" title="${gapTitle(g)}">${gapIcon(g)} ${ts(g.at_s)} · ${gapText(g)}</div>`).join("");
       return `${gaps}<div class="line${c.flag ? " flagged" : ""}${busy ? " busy" : ""}${c.edited ? " edited" : ""}" data-i="${i}"><button class="stamp" data-t="${c.start_s}">${ts(c.start_s)}</button>${spk}<p dir="auto" title="Double-click to edit">${text}</p>${redo}</div>`;
     })
     .join("");
@@ -757,14 +851,15 @@ function renderTimeline() {
   const steps = ["Decode audio", "Detect speakers", "Load speech model", "Transcribe", "Ready"];
   let activeIdx = 4, pct = 100, statusText = "";
   const meta: string[] = ["", "", "", "", ""];
-  const stageIdx: Record<string, number> = { decoding: 0, "detecting speakers": 1, "loading model": 2, transcribing: 3 };
+  const stageIdx: Record<string, number> = { decoding: 0, joining: 0, "saving audio": 0, "detecting speakers": 1, "loading model": 2, transcribing: 3 };
   const errIdx = m.status === "failed" ? (m.chunks.length ? 4 : pr ? stageIdx[pr.stage] ?? 0 : m.duration_s ? 2 : 0) : -1;
   const nSpk = new Set(m.chunks.map((c) => c.speaker).filter(Boolean)).size;
 
   if (m.status === "transcribing") {
     activeIdx = !pr ? 0 : stageIdx[pr.stage] ?? 0;
     pct = pr && pr.total ? (100 * pr.done) / pr.total : activeIdx * 4;
-    if (pr && pr.total) meta[3] = `${pr.done} / ${pr.total} parts`;
+    if (pr && pr.total) meta[activeIdx] = pr.stage === "joining" ? `recording ${pr.done + 1} of ${pr.total}` : `${pr.done} / ${pr.total} parts`;
+    if (pr?.stage === "joining" || pr?.stage === "saving audio") pct = 2;
     if (activeIdx > 1 && !(pr?.stage === "detecting speakers")) meta[1] = settings.speakers && status.diarizer_present ? "" : "off";
     statusText = `// ${steps[activeIdx].toLowerCase()}…`;
   } else if (m.status === "ready") {
@@ -778,6 +873,11 @@ function renderTimeline() {
     activeIdx = 0;
     pct = 0;
     statusText = "// recording: saved to disk as it goes";
+  } else if (m.status === "recorded") {
+    activeIdx = 1;
+    pct = 0;
+    meta[0] = m.duration_s ? ts(m.duration_s) : "";
+    statusText = "// recorded · waiting for TRANSCRIBE";
   } else {
     pct = 0;
     statusText = "// failed";
@@ -787,7 +887,7 @@ function renderTimeline() {
     let cls = "";
     if (errIdx >= 0) cls = i < errIdx ? "done" : i === errIdx ? "error" : "";
     else if (m.status === "ready") cls = "done";
-    else cls = i < activeIdx ? "done" : i === activeIdx ? "active" : "";
+    else cls = i < activeIdx ? "done" : i === activeIdx && m.status !== "recorded" ? "active" : "";
     const mt = i === errIdx ? esc(m.error ?? "") : esc(meta[i]);
     return `<div class="tl-ev ${cls}"><div class="tl-dot"></div><div><div class="tl-label">${label}</div>${mt ? `<div class="tl-meta">${mt}</div>` : ""}</div></div>`;
   });
@@ -1317,6 +1417,7 @@ async function renderSettings() {
   $("s-auto-output").innerHTML = `<option value="">Nothing</option>${opts}`;
   $<HTMLSelectElement>("s-auto-output").value = templates.some((t) => t.id === settings.auto_output) ? settings.auto_output : "";
   setFmt("s-auto-index", settings.auto_index ? "on" : "off");
+  setFmt("s-auto-transcribe", settings.auto_transcribe ? "on" : "off");
   const bp = settings.brain_provider;
   setFmt("s-brain-engine", bp ? engineKind(bp) : "same");
   $<HTMLInputElement>("s-local-temp").value = String(settings.local.temperature);
@@ -1407,6 +1508,7 @@ async function saveSettings() {
   settings.default_template = $<HTMLSelectElement>("s-default-template").value;
   settings.auto_output = $<HTMLSelectElement>("s-auto-output").value;
   settings.auto_index = getFmt("s-auto-index") === "on";
+  settings.auto_transcribe = getFmt("s-auto-transcribe") === "on";
   settings.auto_update = getFmt("s-auto-update") !== "off";
   const num = (id: string, def: number, lo: number, hi: number) => {
     const v = Number($<HTMLInputElement>(id).value);
@@ -1578,15 +1680,16 @@ async function init() {
     audio().pause();
     audio().removeAttribute("src");
     await invoke("delete_meeting", { id: current.id });
-    current = null;
-    $("meeting-layout").classList.add("hidden");
-    $("no-meeting").classList.remove("hidden");
-    showView("library");
+    closeMeeting();
   };
   $("btn-retranscribe").onclick = async () => {
-    if (!current || !(await askDialog("Transcribe this meeting again with the current settings? The existing transcript is replaced.", { kind: "warning" }))) return;
-    try { await invoke("retranscribe", { id: current.id }); await openMeeting(current.id); } catch (e) { toast(String(e), true); }
+    if (!current) return;
+    if (current.chunks.length && !(await askDialog("Transcribe this meeting again with the current settings? The existing transcript is replaced.", { kind: "warning" }))) return;
+    await transcribeCurrent();
   };
+  $("btn-pause").onclick = togglePause;
+  $("btn-join").onclick = joinSelected;
+  $("btn-join-clear").onclick = () => { selected.clear(); renderLibrary(); };
   wireResultButtons();
 
   // player
@@ -1730,12 +1833,16 @@ async function init() {
     status = await invoke<EngineStatus>("engine_status");
     if ($("v-library").classList.contains("active")) renderLibrary();
     const m = meetings.find((x) => x.id === ev.payload);
-    if (current?.id === ev.payload) await openMeeting(ev.payload);
+    if (current?.id === ev.payload) {
+      if (m) await openMeeting(ev.payload);
+      else closeMeeting(); // joined into another meeting
+    }
     if (m?.status === "ready") toast(`Transcribed: ${m.title}`);
+    if (m?.status === "recorded") toast(`Saved: ${m.title} · press TRANSCRIBE when ready`);
     if (m?.status === "failed") toast(`Failed: ${m.title}`, true);
   });
   invoke<string[]>("take_recovered").then((titles) => {
-    if (titles.length) toast(`Recovered an unfinished recording: ${titles.join(", ")}. Transcribing it now.`);
+    if (titles.length) toast(`Recovered an unfinished recording: ${titles.join(", ")}. ${settings.auto_transcribe ? "Transcribing it now." : "Saved: press TRANSCRIBE when ready."}`);
   });
   await listen<[number, number]>("model-download", (ev) => {
     const pct = `${Math.floor((100 * ev.payload[0]) / ev.payload[1])}%`;
