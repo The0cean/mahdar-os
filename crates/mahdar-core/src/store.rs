@@ -47,6 +47,15 @@ pub struct Output {
     pub text: String,
 }
 
+/// A stretch of a recording where no audio was captured (laptop asleep, microphone lost).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Gap {
+    /// Position in the audio where it happened.
+    pub at_s: f64,
+    /// Real time that went unrecorded.
+    pub missing_s: f64,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
@@ -82,6 +91,9 @@ pub struct Meeting {
     /// The user's own notes, typed in Mahdar or imported. "[mm:ss]" marks a time in the recording.
     #[serde(default)]
     pub notes: String,
+    /// Parts of a recording that were not captured.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<Gap>,
 }
 
 impl Meeting {
@@ -94,19 +106,24 @@ impl Meeting {
         self.transcript_between(0.0, f64::INFINITY)
     }
 
-    /// Transcript lines that overlap `from_s..to_s`, in the same format.
+    /// Transcript lines that overlap `from_s..to_s`, in the same format. A gap in the
+    /// recording is marked before the line it falls in.
     pub fn transcript_between(&self, from_s: f64, to_s: f64) -> String {
-        self.chunks
-            .iter()
-            .filter(|c| c.end_s > from_s && c.start_s < to_s)
-            .map(|c| (c, crate::asr::clean_text(&c.text)))
-            .filter(|(_, t)| !t.is_empty())
-            .map(|(c, t)| match c.speaker {
+        let mut lines = Vec::new();
+        for c in self.chunks.iter().filter(|c| c.end_s > from_s && c.start_s < to_s) {
+            for g in self.gaps.iter().filter(|g| g.at_s >= c.start_s && g.at_s < c.end_s) {
+                lines.push(format!("[{}] (recording gap: {} not recorded)", fmt_ts(g.at_s), fmt_ts(g.missing_s)));
+            }
+            let t = crate::asr::clean_text(&c.text);
+            if t.is_empty() {
+                continue;
+            }
+            lines.push(match c.speaker {
                 Some(n) => format!("[{}] {}: {}", fmt_ts(c.start_s), self.speaker_name(n), t),
                 None => format!("[{}] {}", fmt_ts(c.start_s), t),
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+            });
+        }
+        lines.join("\n")
     }
 }
 
@@ -384,5 +401,8 @@ mod tests {
         assert_eq!(m.transcript_between(120.0, 150.0), "[01:40] Speaker 1: price is 40");
         assert_eq!(m.transcript_between(90.0, 210.0).lines().count(), 3);
         assert_eq!(m.transcript_text().lines().count(), 3);
+        let mut m = m;
+        m.gaps.push(Gap { at_s: 150.0, missing_s: 185.0 });
+        assert_eq!(m.transcript_between(120.0, 150.0), "[02:30] (recording gap: 03:05 not recorded)\n[01:40] Speaker 1: price is 40");
     }
 }
