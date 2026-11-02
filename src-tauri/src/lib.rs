@@ -5,7 +5,8 @@ pub mod watchdog;
 mod update;
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use chrono::Local;
@@ -21,8 +22,14 @@ pub(crate) struct AppState {
     pub(crate) store: Store,
     native_dir: PathBuf,
     engine: Mutex<Option<Engine>>,
+    /// Where the speech engine runs once loaded ("Vulkan", "CPU"), readable while a
+    /// transcription holds `engine`.
+    engine_backend: Mutex<Option<String>>,
+    /// Settings changed the model or backend while the engine was busy: reload it on next use.
+    engine_stale: AtomicBool,
     /// Speaker diarizer (Sortformer), loaded on first use.
     diarizer: Mutex<Option<Engine>>,
+    diarizer_stale: AtomicBool,
     recorder: Mutex<Option<(Recorder, Instant)>>,
     /// FastFlowLM server started by Mahdar; stopped when the app exits.
     flm: Mutex<Option<std::process::Child>>,
@@ -96,6 +103,12 @@ pub(crate) fn spawn_job(app: &AppHandle, id: &str, job: impl FnOnce(&AppHandle) 
     });
 }
 
+/// Whether ffmpeg runs. Checked once: installing it needs a restart of Mahdar anyway.
+fn has_ffmpeg() -> bool {
+    static FFMPEG: OnceLock<bool> = OnceLock::new();
+    *FFMPEG.get_or_init(|| which("ffmpeg"))
+}
+
 fn which(cmd: &str) -> bool {
     let mut c = std::process::Command::new(cmd);
     c.arg("-version").stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
@@ -119,11 +132,20 @@ fn save_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> 
     let old = state.store.load_settings();
     let remote_changed = (old.remote_enabled, old.remote_port, &old.remote_token)
         != (settings.remote_enabled, settings.remote_port, &settings.remote_token);
+    // Reload on next use. A transcription can hold an engine for minutes: never wait for it here
+    // (this runs on the window's thread), mark it stale instead.
     if old.model_path != settings.model_path || old.backend != settings.backend {
-        *state.engine.lock().unwrap() = None; // reload on next use
+        match state.engine.try_lock() {
+            Ok(mut g) => *g = None,
+            Err(_) => state.engine_stale.store(true, Ordering::Relaxed),
+        }
+        *state.engine_backend.lock().unwrap() = None;
     }
     if old.diarizer_path != settings.diarizer_path || old.backend != settings.backend {
-        *state.diarizer.lock().unwrap() = None;
+        match state.diarizer.try_lock() {
+            Ok(mut g) => *g = None,
+            Err(_) => state.diarizer_stale.store(true, Ordering::Relaxed),
+        }
     }
     state.store.save_settings(&settings).map_err(err)?;
     if old.provider.label() != settings.provider.label() {
@@ -149,12 +171,17 @@ struct ApiKeyStatus {
     source: String,
 }
 
+// Commands that touch the Credential Manager, the network or other programs are async: plain
+// commands run on the window's thread, and the window freezes until they return.
+
 #[tauri::command]
-fn api_key_status() -> ApiKeyStatus {
-    match mahdar_core::secrets::anthropic_key() {
+async fn api_key_status() -> CmdResult<ApiKeyStatus> {
+    tauri::async_runtime::spawn_blocking(|| match mahdar_core::secrets::anthropic_key() {
         Some((k, src)) => ApiKeyStatus { masked: mahdar_core::secrets::mask(&k), source: src.into() },
         None => ApiKeyStatus { masked: String::new(), source: String::new() },
-    }
+    })
+    .await
+    .map_err(err)
 }
 
 #[tauri::command]
@@ -319,8 +346,8 @@ pub(crate) fn monitor(app: &AppHandle, lines: usize) -> Monitor {
 }
 
 #[tauri::command]
-fn monitor_snapshot(app: AppHandle) -> Monitor {
-    monitor(&app, 400)
+async fn monitor_snapshot(app: AppHandle) -> CmdResult<Monitor> {
+    tauri::async_runtime::spawn_blocking(move || monitor(&app, 400)).await.map_err(err)
 }
 
 #[tauri::command]
@@ -371,8 +398,13 @@ struct RemoteInfo {
     qr_svg: String,
 }
 
+/// Phone addresses and QR code. Async: finding the addresses runs PowerShell and Tailscale.
 #[tauri::command]
-fn remote_info(state: State<AppState>) -> RemoteInfo {
+async fn remote_info(app: AppHandle) -> CmdResult<RemoteInfo> {
+    tauri::async_runtime::spawn_blocking(move || remote_info_now(&app.state::<AppState>())).await.map_err(err)
+}
+
+fn remote_info_now(state: &AppState) -> RemoteInfo {
     let s = state.store.load_settings();
     let (addrs, dns) = remote::addresses();
     let mut urls: Vec<(String, String)> = addrs
@@ -412,16 +444,18 @@ async fn remote_setup_https(app: AppHandle) -> CmdResult<String> {
     tauri::async_runtime::spawn_blocking(move || remote::setup_https(port)).await.map_err(err)?
 }
 
+/// Never waits: a transcription holds the engine for minutes, and this runs on the window's
+/// thread (the Library and Settings call it).
 #[tauri::command]
 fn engine_status(state: State<AppState>) -> EngineStatus {
     let s = state.store.load_settings();
-    let loaded_backend = state.engine.lock().unwrap().as_ref().map(|e| e.backend_name().to_string());
+    let loaded_backend = state.engine_backend.lock().unwrap().clone();
     EngineStatus {
         model_present: Path::new(&s.model_path).is_file(),
         model_path: s.model_path,
         model_bytes_expected: mahdar_core::MODEL_BYTES,
         loaded_backend,
-        ffmpeg: which("ffmpeg"),
+        ffmpeg: has_ffmpeg(),
         data_dir: state.store.root().to_string_lossy().into_owned(),
         diarizer_present: Path::new(&s.diarizer_path).is_file(),
     }
@@ -452,8 +486,9 @@ fn download_model(app: AppHandle, state: State<AppState>, which: Option<String>)
 // ---------- meetings ----------
 
 #[tauri::command]
-fn list_meetings(state: State<AppState>) -> CmdResult<Vec<MeetingSummary>> {
-    state.store.list_meetings().map_err(err)
+async fn list_meetings(app: AppHandle) -> CmdResult<Vec<MeetingSummary>> {
+    // Reads every meeting file: off the window's thread.
+    tauri::async_runtime::spawn_blocking(move || app.state::<AppState>().store.list_meetings().map_err(err)).await.map_err(err)?
 }
 
 #[tauri::command]
@@ -521,13 +556,18 @@ fn load_engine(state: &AppState, model: &Path, backend: Backend) -> anyhow::Resu
 /// Lock the speech engine, loading the model first if needed (GPU with CPU fallback).
 fn loaded_engine(state: &AppState) -> anyhow::Result<std::sync::MutexGuard<'_, Option<Engine>>> {
     let mut guard = state.engine.lock().unwrap();
+    if state.engine_stale.swap(false, Ordering::Relaxed) {
+        *guard = None;
+    }
     if guard.is_none() {
         let s = state.store.load_settings();
         let model = PathBuf::from(&s.model_path);
         if !model.is_file() {
             anyhow::bail!("speech model not found at {}. Open Settings to download it.", model.display());
         }
-        *guard = Some(load_engine(state, &model, s.backend)?);
+        let engine = load_engine(state, &model, s.backend)?;
+        *state.engine_backend.lock().unwrap() = Some(engine.backend_name().to_string());
+        *guard = Some(engine);
     }
     Ok(guard)
 }
@@ -540,6 +580,9 @@ fn loaded_diarizer(state: &AppState) -> anyhow::Result<Option<std::sync::MutexGu
         return Ok(None);
     }
     let mut guard = state.diarizer.lock().unwrap();
+    if state.diarizer_stale.swap(false, Ordering::Relaxed) {
+        *guard = None;
+    }
     if guard.is_none() {
         *guard = Some(load_engine(state, &path, s.backend)?);
     }
@@ -1077,7 +1120,10 @@ pub fn run() {
                 store,
                 native_dir,
                 engine: Mutex::new(None),
+                engine_backend: Mutex::new(None),
+                engine_stale: AtomicBool::new(false),
                 diarizer: Mutex::new(None),
+                diarizer_stale: AtomicBool::new(false),
                 recorder: Mutex::new(None),
                 flm: Mutex::new(None),
                 remote: Mutex::new(None),
