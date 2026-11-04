@@ -577,7 +577,7 @@ impl Recorder {
                 }
                 // Every 5 s: follow a switch of speakers/headphones, or retry after an error.
                 ticks += 1;
-                if with_laptop && ticks % 10 == 0 {
+                if with_laptop && ticks.is_multiple_of(10) {
                     let failed = sys.failed.load(Relaxed);
                     let now_out = output_name();
                     let switched = now_out.is_some() && sys_stream.as_ref().map(|s| Some(&s.2) != now_out.as_ref()).unwrap_or(true);
