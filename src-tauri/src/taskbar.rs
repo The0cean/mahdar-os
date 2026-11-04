@@ -4,6 +4,8 @@
 //!   or preparing;
 //! - the window title says the same ("● REC 12:34 · Mahdar"), for the taskbar label and Alt+Tab;
 //! - the button flashes when a transcription ends while Mahdar isn't the active window.
+//!
+//! A recording in stealth shows none of it: no badge, no REC in the title.
 
 use std::time::Duration;
 
@@ -41,8 +43,10 @@ pub(crate) struct Shown {
 /// A job as the progress map has it: (stage, done, total).
 type Job<'a> = (&'a str, usize, usize);
 
-/// What the taskbar should show. `recording`: (seconds, paused) when the microphone is on.
-pub(crate) fn decide(recording: Option<(f64, bool)>, jobs: &[Job]) -> Shown {
+/// What the taskbar should show. `recording`: (seconds, paused) when the microphone is on;
+/// `stealth`: the recording isn't shown.
+pub(crate) fn decide(recording: Option<(f64, bool)>, stealth: bool, jobs: &[Job]) -> Shown {
+    let recording = recording.filter(|_| !stealth);
     // Failed jobs linger in the map for a while; they are not work in progress.
     let jobs: Vec<&Job> = jobs.iter().filter(|(stage, _, _)| !stage.starts_with("failed")).collect();
     let percent = jobs
@@ -82,10 +86,11 @@ pub(crate) fn spawn(app: AppHandle) {
             std::thread::sleep(Duration::from_secs(1));
             let state = app.state::<AppState>();
             let recording = state.recorder.lock().unwrap().as_ref().map(|(r, _)| (r.seconds(), r.is_paused()));
+            let stealth = state.stealth.load(std::sync::atomic::Ordering::Relaxed);
             let shown = {
                 let map = state.progress.lock().unwrap();
                 let jobs: Vec<Job> = map.values().map(|p| (p.stage.as_str(), p.done, p.total)).collect();
-                decide(recording, &jobs)
+                decide(recording, stealth, &jobs)
             };
             if last.as_ref() != Some(&shown) {
                 apply(&app, &shown, last.as_ref());
@@ -160,24 +165,29 @@ mod tests {
 
     #[test]
     fn shows_recording_and_work() {
-        let idle = decide(None, &[]);
+        let idle = decide(None, false, &[]);
         assert_eq!(idle, Shown { badge: Badge::None, bar: Bar::None, title: "Mahdar".into() });
 
-        let rec = decide(Some((754.0, false)), &[]);
+        let rec = decide(Some((754.0, false)), false, &[]);
         assert_eq!((rec.badge, rec.bar, rec.title.as_str()), (Badge::Recording, Bar::None, "● REC 12:34 · Mahdar"));
 
         // Paused while another meeting transcribes: badge for the recording, bar for the job.
-        let both = decide(Some((60.0, true)), &[("transcribing", 21, 50)]);
+        let both = decide(Some((60.0, true)), false, &[("transcribing", 21, 50)]);
         assert_eq!((both.badge, both.bar, both.title.as_str()), (Badge::Paused, Bar::Percent(42), "❚❚ PAUSED 01:00 · Transcribing 42% · Mahdar"));
 
-        let prep = decide(None, &[("loading model", 0, 0)]);
+        let prep = decide(None, false, &[("loading model", 0, 0)]);
         assert_eq!((prep.bar, prep.title.as_str()), (Bar::Busy, "Transcribing… · Mahdar"));
-        assert_eq!(decide(None, &[("writing", 0, 0)]).title, "Writing… · Mahdar");
-        assert_eq!(decide(None, &[("joining", 1, 3)]).bar, Bar::Busy);
+        assert_eq!(decide(None, false, &[("writing", 0, 0)]).title, "Writing… · Mahdar");
+        assert_eq!(decide(None, false, &[("joining", 1, 3)]).bar, Bar::Busy);
         // Two transcriptions: the one furthest behind; just started still shows on the bar.
-        assert_eq!(decide(None, &[("transcribing", 9, 10), ("transcribing", 0, 40)]).bar, Bar::Percent(1));
+        assert_eq!(decide(None, false, &[("transcribing", 9, 10), ("transcribing", 0, 40)]).bar, Bar::Percent(1));
         // A failed job hanging around is not work.
-        assert_eq!(decide(None, &[("failed: no key", 0, 0)]), idle);
+        assert_eq!(decide(None, false, &[("failed: no key", 0, 0)]), idle);
+
+        // Stealth: the recording leaves no trace; other work still shows.
+        assert_eq!(decide(Some((754.0, false)), true, &[]), idle);
+        assert_eq!(decide(Some((60.0, true)), true, &[]), idle);
+        assert_eq!(decide(Some((60.0, false)), true, &[("transcribing", 21, 50)]).title, "Transcribing 42% · Mahdar");
     }
 
     #[test]

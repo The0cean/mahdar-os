@@ -248,6 +248,10 @@ pub struct Settings {
     /// TRANSCRIBE (to join parts first, or to keep the laptop free).
     #[serde(default = "yes")]
     pub auto_transcribe: bool,
+    /// Start recordings in stealth: the recording looks like a plain notes page, and the
+    /// taskbar shows nothing (no REC badge or title).
+    #[serde(default)]
+    pub stealth_recording: bool,
 }
 
 impl Settings {
@@ -297,6 +301,7 @@ impl Settings {
             local: LocalOptions::default(),
             auto_update: true,
             auto_transcribe: true,
+            stealth_recording: false,
         }
     }
 }

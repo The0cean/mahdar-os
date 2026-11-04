@@ -412,6 +412,12 @@ mark { background: var(--accent); color: #fff; padding: 0 2px; }
 .rec-actions .go-btn { flex: 1; }
 #rec-overlay.paused .rec-card .heading { color: var(--text4); animation: none; }
 #rec-overlay.paused .rec-time { opacity: .45; }
+/* Stealth: a plain notes page, nothing about recording. */
+#rec-overlay.stealth .rec-only { display: none; }
+#rec-overlay.stealth { background: var(--bg); backdrop-filter: none; }
+#rec-overlay.stealth .rec-card { width: min(760px, calc(100vw - 32px)); box-shadow: none; border-color: var(--border); }
+#rec-overlay.stealth #rec-notes { height: 52vh; resize: none; }
+#rec-overlay.stealth .rec-actions .hbtn { padding: 0 12px; }
 .t-empty .go-btn { display: block; width: auto; margin: 14px auto 8px; padding: 10px 32px; }
 .t-empty .t-hint { display: block; }
 #rec-gaps:empty { display: none; }

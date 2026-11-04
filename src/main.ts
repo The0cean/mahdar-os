@@ -14,6 +14,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { open, save, ask as askDialog } from "@tauri-apps/plugin-dialog";
 import { marked } from "marked";
+import { joinStamps, realignStamps, splitStamps, type Stamps } from "./stamps";
 
 // ───────── types (mirror mahdar-core) ─────────
 type Status = "recording" | "recorded" | "transcribing" | "ready" | "failed";
@@ -41,7 +42,7 @@ interface Settings {
   brain_provider: Provider | null;
   default_template: string; auto_output: string; auto_index: boolean;
   local: { temperature: number; context: number; autostart: boolean; timeout_min: number };
-  auto_update: boolean; auto_transcribe: boolean;
+  auto_update: boolean; auto_transcribe: boolean; stealth_recording: boolean;
 }
 interface UpdateInfo {
   current: string; state: string; version: string; notes: string; date: string; percent: number;
@@ -651,11 +652,12 @@ let recNotesTimer = 0;
 let recPaused = false;
 async function startRecording() {
   const title = $<HTMLInputElement>("rec-title-quick").value;
-  try { recId = await invoke<string>("start_recording", { title }); } catch (e) { return toast(String(e), true); }
+  const quiet = settings.stealth_recording;
+  try { recId = await invoke<string>("start_recording", { title, stealth: quiet }); } catch (e) { return toast(String(e), true); }
   $<HTMLInputElement>("rec-title").value = title;
   recElapsed = 0;
+  setStealth(quiet, false);
   showPaused(false);
-  $("btn-stop").textContent = settings.auto_transcribe ? "STOP & TRANSCRIBE" : "STOP & SAVE";
   refreshLibrary();
   $("rec-overlay").classList.remove("hidden");
   $("rec-notes").focus();
@@ -672,8 +674,71 @@ async function startRecording() {
 function showPaused(paused: boolean) {
   recPaused = paused;
   $("rec-overlay").classList.toggle("paused", paused);
-  $("rec-heading").textContent = paused ? "❚❚ Paused · the microphone is off" : "● Recording";
-  $("btn-pause").textContent = paused ? "▶ RESUME" : "❚❚ PAUSE";
+  recLabels();
+}
+/** The recording card's words, which stealth keeps neutral. */
+function recLabels() {
+  const p = recPaused;
+  $("rec-heading").textContent = p ? "❚❚ Paused · the microphone is off" : "● Recording";
+  $("btn-pause").textContent = stealth ? (p ? "▶" : "‖") : p ? "▶ RESUME" : "❚❚ PAUSE";
+  $("btn-pause").title = stealth ? (p ? "Resume" : "Pause") : "Pause: the microphone turns off until you resume";
+  $("btn-stop").textContent = stealth ? "DONE" : settings.auto_transcribe ? "STOP & TRANSCRIBE" : "STOP & SAVE";
+  $("btn-stealth").textContent = stealth ? "◐" : "◐ STEALTH";
+  $("btn-stealth").title = stealth ? "Show the recording · Ctrl+Shift+H" : "Stealth: a plain notes page, nothing about recording on screen or on the taskbar · Ctrl+Shift+H";
+  $<HTMLTextAreaElement>("rec-notes").placeholder = stealth ? "" : "// type as you go: each new line gets the recording time";
+}
+
+// ───────── stealth ─────────
+// In stealth the recording card is a plain notes page. The notes' time stamps are kept out of
+// sight, one per line, and put back when stealth ends and in everything saved.
+let stealth = false;
+let shownLines: string[] = [];
+let lineStamps: Stamps = [];
+let stampNext = false;
+
+function setStealth(on: boolean, tell = true) {
+  const box = $<HTMLTextAreaElement>("rec-notes");
+  if (on !== stealth) {
+    // Keep the caret on its line, the same distance from the line's end (stamps sit at the start).
+    const before = box.value.slice(0, box.selectionStart).split("\n");
+    const line = before.length - 1;
+    const fromEnd = box.value.split("\n")[line].length - before[line].length;
+    if (on) {
+      const { text, stamps } = splitStamps(box.value);
+      box.value = text;
+      lineStamps = stamps;
+      shownLines = text.split("\n");
+    } else {
+      box.value = recNotesText();
+      lineStamps = [];
+    }
+    stealth = on;
+    const lines = box.value.split("\n");
+    const pos = lines.slice(0, line).reduce((a, l) => a + l.length + 1, 0) + Math.max(0, lines[line].length - fromEnd);
+    box.setSelectionRange(pos, pos);
+  }
+  $("rec-overlay").classList.toggle("stealth", on);
+  recLabels();
+  if (tell) invoke("set_stealth", { on }).catch(() => { /* only the taskbar */ });
+}
+
+/** The recording's notes as saved: with their time stamps, in stealth too. */
+function recNotesText(): string {
+  const v = $<HTMLTextAreaElement>("rec-notes").value;
+  return stealth ? joinStamps(v, lineStamps) : v;
+}
+
+/** In stealth, keep each hidden stamp on its line as the notes change; a line typed into from empty gets the time. */
+function trackStamps() {
+  if (!stealth) return;
+  const box = $<HTMLTextAreaElement>("rec-notes");
+  lineStamps = realignStamps(shownLines, box.value.split("\n"), lineStamps);
+  shownLines = box.value.split("\n");
+  if (stampNext) {
+    stampNext = false;
+    const line = box.value.slice(0, box.selectionStart).split("\n").length - 1;
+    lineStamps[line] ??= `[${ts(recElapsed)}]`;
+  }
 }
 async function togglePause() {
   const paused = !recPaused;
@@ -686,7 +751,7 @@ function saveRecNotesSoon() {
   clearTimeout(recNotesTimer);
   recNotesTimer = window.setTimeout(() => {
     recNotesTimer = 0;
-    if (recId) invoke("save_notes", { id: recId, notes: $<HTMLTextAreaElement>("rec-notes").value }).catch(() => { /* saved again on stop */ });
+    if (recId) invoke("save_notes", { id: recId, notes: recNotesText() }).catch(() => { /* saved again on stop */ });
   }, 1500);
 }
 const span = (s: number) => s >= 60 ? `${Math.round(s / 60)} min` : `${Math.round(s)} s`;
@@ -706,11 +771,13 @@ async function stopRecording() {
   clearTimeout(recNotesTimer);
   recId = "";
   $("rec-overlay").classList.add("hidden");
+  const text = recNotesText();
   try {
     const notes = $<HTMLTextAreaElement>("rec-notes");
-    const id = await invoke<string>("stop_recording", { title: $<HTMLInputElement>("rec-title").value, notes: notes.value });
+    const id = await invoke<string>("stop_recording", { title: $<HTMLInputElement>("rec-title").value, notes: text });
     $<HTMLInputElement>("rec-title-quick").value = "";
     notes.value = "";
+    setStealth(false, false);
     await openMeeting(id);
   } catch (e) { toast(String(e), true); }
 }
@@ -1357,6 +1424,10 @@ function stampRecNotes(e: InputEvent) {
   const lineStart = v.lastIndexOf("\n", a - 1) + 1;
   const lineEnd = v.indexOf("\n", b);
   if (v.slice(lineStart, lineEnd < 0 ? v.length : lineEnd).trim()) return;
+  if (stealth) {
+    stampNext = true; // out of sight: trackStamps notes the time once the text is in
+    return;
+  }
   e.preventDefault();
   box.setRangeText(`[${ts(recElapsed)}] ${e.data}`, lineStart, b, "end");
 }
@@ -1672,6 +1743,7 @@ async function renderSettings() {
   $<HTMLSelectElement>("s-auto-output").value = templates.some((t) => t.id === settings.auto_output) ? settings.auto_output : "";
   setFmt("s-auto-index", settings.auto_index ? "on" : "off");
   setFmt("s-auto-transcribe", settings.auto_transcribe ? "on" : "off");
+  setFmt("s-stealth", settings.stealth_recording ? "on" : "off");
   const bp = settings.brain_provider;
   setFmt("s-brain-engine", bp ? engineKind(bp) : "same");
   $<HTMLInputElement>("s-local-temp").value = String(settings.local.temperature);
@@ -1766,6 +1838,7 @@ async function saveSettings() {
   settings.auto_output = $<HTMLSelectElement>("s-auto-output").value;
   settings.auto_index = getFmt("s-auto-index") === "on";
   settings.auto_transcribe = getFmt("s-auto-transcribe") === "on";
+  settings.stealth_recording = getFmt("s-stealth") === "on";
   settings.auto_update = getFmt("s-auto-update") !== "off";
   const num = (id: string, def: number, lo: number, hi: number) => {
     const v = Number($<HTMLInputElement>(id).value);
@@ -1881,7 +1954,7 @@ async function init() {
   $("n-stamp").onclick = () => stampNote(true);
   $("n-import").onclick = importNotes;
   $("rec-notes").addEventListener("beforeinput", (e) => stampRecNotes(e as InputEvent));
-  $("rec-notes").addEventListener("input", saveRecNotesSoon);
+  $("rec-notes").addEventListener("input", () => { trackStamps(); saveRecNotesSoon(); });
   window.addEventListener("beforeunload", () => { flushNotes(); });
   $("btn-ask").onclick = ask;
   $("ask-input").onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ask(); } };
@@ -1949,6 +2022,13 @@ async function init() {
     await transcribeCurrent();
   };
   $("btn-pause").onclick = togglePause;
+  $("btn-stealth").onclick = () => { setStealth(!stealth); $("rec-notes").focus(); };
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && e.shiftKey && e.code === "KeyH" && !$("rec-overlay").classList.contains("hidden")) {
+      e.preventDefault();
+      setStealth(!stealth);
+    }
+  });
   $("btn-trim").onclick = openTrim;
   wireTrim();
   $("btn-join").onclick = joinSelected;
