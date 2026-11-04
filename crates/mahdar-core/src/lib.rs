@@ -11,6 +11,7 @@ pub mod notes;
 pub mod secrets;
 pub mod store;
 pub mod summarize;
+pub mod text_export;
 
 use std::path::Path;
 use std::time::Instant;
