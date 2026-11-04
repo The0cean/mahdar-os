@@ -312,6 +312,32 @@ fn open_mic(cap: &Capture) -> Result<(cpal::Stream, u32)> {
         .default_input_device()
         .ok_or_else(|| anyhow!("no microphone found"))?;
     let config = device.default_input_config()?;
+    open_input(&device, config, cap, "microphone")
+}
+
+/// The laptop's own sound, what its speakers or headphones play (the other side of an online
+/// meeting): a WASAPI loopback stream, i.e. an input stream on the default output device.
+/// Windows only. Returns the stream, its rate and the device's name.
+fn open_loopback(cap: &Capture) -> Result<(cpal::Stream, u32, String)> {
+    if !cfg!(windows) {
+        bail!("recording the laptop's sound needs Windows");
+    }
+    let device = cpal::default_host()
+        .default_output_device()
+        .ok_or_else(|| anyhow!("no speakers or headphones found"))?;
+    let name = device.name().unwrap_or_default();
+    let config = device.default_output_config()?;
+    let (stream, rate) = open_input(&device, config, cap, "laptop sound")?;
+    Ok((stream, rate, name))
+}
+
+/// The default output device's name, to notice a switch (headphones plugged in).
+fn output_name() -> Option<String> {
+    cpal::default_host().default_output_device().and_then(|d| d.name().ok())
+}
+
+/// Capture from `device` with `config` into `cap`, mixed down to mono. `what` names it in the log.
+fn open_input(device: &cpal::Device, config: cpal::SupportedStreamConfig, cap: &Capture, what: &'static str) -> Result<(cpal::Stream, u32)> {
     let rate = config.sample_rate().0;
     let channels = config.channels() as usize;
     let (buf, level, failed) = (cap.buf.clone(), cap.level.clone(), cap.failed.clone());
@@ -325,7 +351,7 @@ fn open_mic(cap: &Capture) -> Result<(cpal::Stream, u32)> {
         }
     };
     let err_fn = move |e| {
-        crate::log::warn("record", format!("microphone error: {e}"));
+        crate::log::warn("record", format!("{what} error: {e}"));
         failed.store(true, std::sync::atomic::Ordering::Relaxed);
     };
     let stream = match config.sample_format() {
@@ -343,10 +369,38 @@ fn open_mic(cap: &Capture) -> Result<(cpal::Stream, u32)> {
             err_fn,
             None,
         )?,
-        other => bail!("unsupported microphone sample format {other:?}"),
+        other => bail!("unsupported {what} sample format {other:?}"),
     };
     stream.play()?;
     Ok((stream, rate))
+}
+
+/// The laptop's sound ahead of the microphone that is kept for the next round, at most.
+const LAPTOP_SLACK_S: f64 = 0.2;
+
+/// Add the laptop's sound to the microphone's, sample for sample. The microphone sets the pace:
+/// what the laptop hasn't delivered yet (it sends nothing while silent) counts as silence, and
+/// what is left over beyond `slack` samples is dropped, so the two clocks can't drift apart.
+fn mix_in(mic: &mut [f32], pending: &mut Vec<f32>, slack: usize) {
+    let n = mic.len().min(pending.len());
+    for (m, s) in mic.iter_mut().zip(pending.drain(..n)) {
+        *m = (*m + s).clamp(-1.0, 1.0);
+    }
+    if pending.len() > slack {
+        let extra = pending.len() - slack;
+        pending.drain(..extra);
+    }
+}
+
+/// Whether the laptop's sound is being recorded too.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Laptop {
+    /// Not asked for: microphone only.
+    Off,
+    On,
+    /// Asked for, but it couldn't be opened (no output device, not Windows): microphone only.
+    Unavailable,
 }
 
 /// Microphone recorder. Runs the cpal stream on its own thread (cpal streams are not Send on
@@ -361,6 +415,9 @@ pub struct Recorder {
     seconds: Arc<std::sync::atomic::AtomicU64>,
     gaps: Arc<Mutex<Vec<Gap>>>,
     paused: Arc<std::sync::atomic::AtomicBool>,
+    laptop_level: Arc<Mutex<f32>>,
+    /// [`Laptop`] as 0 / 1 / 2.
+    laptop: Arc<std::sync::atomic::AtomicU8>,
 }
 
 enum Cmd {
@@ -370,8 +427,9 @@ enum Cmd {
 
 impl Recorder {
     /// Start recording into `spool` (see [`read_spool`]). `on_gap` is called from the recorder
-    /// thread when audio resumes after a gap or a pause.
-    pub fn start(spool: &Path, on_gap: impl Fn(&Gap) + Send + 'static) -> Result<Self> {
+    /// thread when audio resumes after a gap or a pause. `with_laptop`: mix in the laptop's own
+    /// sound too (online meetings), when it can be opened.
+    pub fn start(spool: &Path, with_laptop: bool, on_gap: impl Fn(&Gap) + Send + 'static) -> Result<Self> {
         use std::sync::atomic::Ordering::Relaxed;
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
         let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
@@ -383,6 +441,10 @@ impl Recorder {
         let gaps_w = gaps.clone();
         let paused = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let paused_w = paused.clone();
+        let sys = Capture { buf: Default::default(), level: Default::default(), failed: Default::default() };
+        let laptop_level = sys.level.clone();
+        let laptop = Arc::new(std::sync::atomic::AtomicU8::new(Laptop::Off as u8));
+        let laptop_w = laptop.clone();
         let spool = spool.to_path_buf();
 
         let thread = std::thread::spawn(move || -> Result<()> {
@@ -401,6 +463,29 @@ impl Recorder {
             // Held while recording; dropped (Windows may sleep) while paused.
             let mut _awake = Some(StayAwake::new());
             let mut stream = Some(stream);
+            // The laptop's sound: its stream, rate and device, and what arrived ahead of the microphone.
+            let mut sys_stream: Option<(cpal::Stream, u32, String)> = None;
+            let mut sys_pending: Vec<f32> = Vec::new();
+            let open_sys = |sys_stream: &mut Option<(cpal::Stream, u32, String)>, why: &str| {
+                drop(sys_stream.take());
+                sys.buf.lock().unwrap().clear();
+                sys.failed.store(false, Relaxed);
+                match open_loopback(&sys) {
+                    Ok(x) => {
+                        crate::log::info("record", format!("recording the laptop's sound too ({}){why}", x.2));
+                        *sys_stream = Some(x);
+                        laptop_w.store(Laptop::On as u8, Relaxed);
+                    }
+                    Err(e) => {
+                        crate::log::warn("record", format!("can't record the laptop's sound, microphone only: {e:#}"));
+                        laptop_w.store(Laptop::Unavailable as u8, Relaxed);
+                    }
+                }
+            };
+            if with_laptop {
+                open_sys(&mut sys_stream, "");
+            }
+            let mut ticks = 0u64;
             let mut written = 0usize;
             let mut tracker = GapTracker::default();
             // Wall-clock time, so time spent asleep counts.
@@ -417,6 +502,7 @@ impl Recorder {
                 };
                 if stop {
                     drop(stream.take()); // ends the callbacks, so the buffer is final
+                    drop(sys_stream.take());
                 }
                 let samples = std::mem::take(&mut *cap.buf.lock().unwrap());
                 let now = std::time::SystemTime::now();
@@ -426,8 +512,17 @@ impl Recorder {
                 if let Some(p) = paused_for.as_mut() {
                     *p += wall_s; // nothing is captured while paused
                 } else {
-                    let samples =
+                    let mut samples =
                         if mic_rate as usize == file.rate { samples } else { resample_linear(&samples, mic_rate as usize, file.rate) };
+                    let sys_got = std::mem::take(&mut *sys.buf.lock().unwrap());
+                    if sys_got.is_empty() {
+                        *sys.level.lock().unwrap() = 0.0; // silent: the meter drops
+                    }
+                    if let Some((_, rate, _)) = &sys_stream {
+                        let rate = *rate as usize;
+                        sys_pending.extend(if rate == file.rate { sys_got } else { resample_linear(&sys_got, rate, file.rate) });
+                        mix_in(&mut samples, &mut sys_pending, (LAPTOP_SLACK_S * file.rate as f64) as usize);
+                    }
                     file.push(&samples)?;
                     written += samples.len();
                     seconds_w.store((written as f64 / file.rate as f64).to_bits(), Relaxed);
@@ -441,6 +536,9 @@ impl Recorder {
                     // Close the microphone and let Windows sleep until RESUME.
                     file.checkpoint()?;
                     drop(stream.take());
+                    drop(sys_stream.take());
+                    sys_pending.clear();
+                    *sys.level.lock().unwrap() = 0.0;
                     cap.buf.lock().unwrap().clear();
                     *cap.level.lock().unwrap() = 0.0;
                     _awake = None;
@@ -467,12 +565,25 @@ impl Recorder {
                             // No audio arrives, so the stall check below keeps retrying.
                             Err(e) => crate::log::warn("record", format!("microphone not back after the pause: {e:#}")),
                         }
+                        if with_laptop {
+                            open_sys(&mut sys_stream, "");
+                        }
                         paused_w.store(false, Relaxed);
                         continue;
                     }
                 }
                 if paused_for.is_some() {
                     continue;
+                }
+                // Every 5 s: follow a switch of speakers/headphones, or retry after an error.
+                ticks += 1;
+                if with_laptop && ticks.is_multiple_of(10) {
+                    let failed = sys.failed.load(Relaxed);
+                    let now_out = output_name();
+                    let switched = now_out.is_some() && sys_stream.as_ref().map(|s| Some(&s.2) != now_out.as_ref()).unwrap_or(true);
+                    if failed || switched {
+                        open_sys(&mut sys_stream, if failed { " after an error" } else { ", output changed" });
+                    }
                 }
                 match tracker.tick(wall_s, got_s, position_s, cap.failed.swap(false, Relaxed)) {
                     Tick::Ok => next_reopen = 0.0,
@@ -504,7 +615,7 @@ impl Recorder {
         });
 
         ready_rx.recv().map_err(|_| anyhow!("recorder thread died"))??;
-        Ok(Recorder { cmd_tx, thread, level, seconds, gaps, paused })
+        Ok(Recorder { cmd_tx, thread, level, seconds, gaps, paused, laptop_level, laptop })
     }
 
     /// Pause (closes the microphone) or resume. Resuming leaves a pause marker in the recording.
@@ -519,6 +630,16 @@ impl Recorder {
     /// Latest peak level 0..1, for a live meter.
     pub fn level(&self) -> f32 {
         *self.level.lock().unwrap()
+    }
+
+    /// Whether the laptop's sound is recorded too, and its latest peak level 0..1.
+    pub fn laptop(&self) -> (Laptop, f32) {
+        let state = match self.laptop.load(std::sync::atomic::Ordering::Relaxed) {
+            1 => Laptop::On,
+            2 => Laptop::Unavailable,
+            _ => Laptop::Off,
+        };
+        (state, *self.laptop_level.lock().unwrap())
     }
 
     /// Length of the recording so far, in seconds of audio (gaps not included).
@@ -560,6 +681,29 @@ fn resample_linear(input: &[f32], from: usize, to: usize) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn laptop_sound_is_mixed_at_the_microphones_pace() {
+        // Both deliver: added, clipped to full scale.
+        let mut mic = vec![0.1, 0.2, 0.9];
+        let mut pending = vec![0.1, -0.2, 0.5, 0.7];
+        mix_in(&mut mic, &mut pending, 10);
+        assert_eq!(mic.iter().map(|v| (v * 10.0).round() / 10.0).collect::<Vec<_>>(), vec![0.2, 0.0, 1.0]);
+        assert_eq!(pending, vec![0.7]); // ahead of the microphone: kept for the next round
+
+        // The laptop silent (nothing delivered): the microphone as is.
+        let mut mic = vec![0.3, 0.3];
+        let mut none = Vec::new();
+        mix_in(&mut mic, &mut none, 10);
+        assert_eq!(mic, vec![0.3, 0.3]);
+
+        // The laptop runs ahead (or the microphone stalled): only `slack` is kept, the newest.
+        let mut mic = vec![0.0; 2];
+        let mut pending: Vec<f32> = (0..10).map(|i| i as f32 / 100.0).collect();
+        mix_in(&mut mic, &mut pending, 3);
+        assert_eq!(mic, vec![0.0, 0.01]);
+        assert_eq!(pending, vec![0.07, 0.08, 0.09]);
+    }
 
     fn tmp(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("mahdar-audio-{}-{name}", std::process::id()));

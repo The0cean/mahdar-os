@@ -42,7 +42,7 @@ interface Settings {
   brain_provider: Provider | null;
   default_template: string; auto_output: string; auto_index: boolean;
   local: { temperature: number; context: number; autostart: boolean; timeout_min: number };
-  auto_update: boolean; auto_transcribe: boolean; stealth_recording: boolean;
+  auto_update: boolean; auto_transcribe: boolean; stealth_recording: boolean; record_laptop: boolean;
 }
 interface UpdateInfo {
   current: string; state: string; version: string; notes: string; date: string; percent: number;
@@ -650,6 +650,11 @@ let recElapsed = 0;
 let recId = "";
 let recNotesTimer = 0;
 let recPaused = false;
+/** The + LAPTOP SOUND toggle next to RECORD shows the setting (Automation → A5). */
+function showLaptopToggle() {
+  $("btn-laptop").classList.toggle("on", settings.record_laptop);
+  $("btn-laptop").textContent = settings.record_laptop ? "✓ LAPTOP SOUND" : "+ LAPTOP SOUND";
+}
 async function startRecording() {
   const title = $<HTMLInputElement>("rec-title-quick").value;
   const quiet = settings.stealth_recording;
@@ -662,11 +667,14 @@ async function startRecording() {
   $("rec-overlay").classList.remove("hidden");
   $("rec-notes").focus();
   recTimer = window.setInterval(async () => {
-    const r = await invoke<{ level: number; seconds: number; gaps: Gap[]; paused: boolean } | null>("recording_level");
+    const r = await invoke<{ level: number; seconds: number; gaps: Gap[]; paused: boolean; laptop: "off" | "on" | "unavailable"; laptop_level: number } | null>("recording_level");
     if (!r) return;
     recElapsed = r.seconds;
     $("rec-time").textContent = ts(r.seconds);
     $("rec-level").style.width = `${Math.min(100, Math.sqrt(r.level) * 100)}%`;
+    $("rec-laptop").classList.toggle("hidden", r.laptop !== "on");
+    $("rec-laptop-off").classList.toggle("hidden", r.laptop !== "unavailable" || r.paused);
+    $("rec-laptop-level").style.width = `${Math.min(100, Math.sqrt(r.laptop_level) * 100)}%`;
     if (r.paused !== recPaused) showPaused(r.paused);
     $("rec-gaps").innerHTML = r.gaps.filter((g) => (g.kind ?? "lost") === "lost").map((g) => `⚠ ${gapText(g)} at ${ts(g.at_s)}. Recording continued.`).join("<br>");
   }, 120);
@@ -1744,6 +1752,7 @@ async function renderSettings() {
   setFmt("s-auto-index", settings.auto_index ? "on" : "off");
   setFmt("s-auto-transcribe", settings.auto_transcribe ? "on" : "off");
   setFmt("s-stealth", settings.stealth_recording ? "on" : "off");
+  setFmt("s-laptop", settings.record_laptop ? "on" : "off");
   const bp = settings.brain_provider;
   setFmt("s-brain-engine", bp ? engineKind(bp) : "same");
   $<HTMLInputElement>("s-local-temp").value = String(settings.local.temperature);
@@ -1839,6 +1848,8 @@ async function saveSettings() {
   settings.auto_index = getFmt("s-auto-index") === "on";
   settings.auto_transcribe = getFmt("s-auto-transcribe") === "on";
   settings.stealth_recording = getFmt("s-stealth") === "on";
+  settings.record_laptop = getFmt("s-laptop") === "on";
+  showLaptopToggle();
   settings.auto_update = getFmt("s-auto-update") !== "off";
   const num = (id: string, def: number, lo: number, hi: number) => {
     const v = Number($<HTMLInputElement>(id).value);
@@ -1932,6 +1943,13 @@ async function init() {
     }
   });
   $("btn-record").onclick = startRecording;
+  showLaptopToggle();
+  $("btn-laptop").onclick = async () => {
+    settings.record_laptop = !settings.record_laptop;
+    showLaptopToggle();
+    try { await invoke("save_settings", { settings }); } catch (e) { toast(String(e), true); }
+    toast(settings.record_laptop ? "Recordings include the laptop's sound (online meetings)" : "Recordings: microphone only");
+  };
   $("btn-stop").onclick = stopRecording;
   $("search").oninput = renderLibrary;
   const drop = $("drop");
@@ -2159,6 +2177,7 @@ async function init() {
   });
   await listen("settings-changed", async () => {
     settings = await invoke<Settings>("get_settings");
+    showLaptopToggle();
     if (current) renderControls();
     if ($("v-library").classList.contains("active")) renderLibrary();
   });

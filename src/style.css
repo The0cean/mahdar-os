@@ -391,6 +391,9 @@ mark { background: var(--accent); color: #fff; padding: 0 2px; }
 .gap-line { font-family: var(--mono); font-size: 11px; color: var(--orange); padding: 8px 20px; border-bottom: 1px dashed var(--orange); background: color-mix(in srgb, var(--orange) 8%, var(--bg)); }
 .gap-line.paused, .gap-line.joined { color: var(--text4); border-bottom-color: var(--border); background: var(--bg); }
 .rec-actions { display: flex; gap: 8px; }
+.rec-laptop { display: flex; align-items: center; gap: 10px; margin: -10px 0 16px; }
+.rec-laptop .lbl { font-family: var(--mono); font-size: 9px; letter-spacing: 1px; color: var(--text4); white-space: nowrap; }
+.rec-laptop .tl-bar { flex: 1; margin: 0; }
 .trim-card { width: min(900px, calc(100vw - 48px)); background: var(--bg); border: 1px solid var(--text); padding: 24px 28px; box-shadow: 8px 8px 0 var(--text); }
 .trim-card .heading { font-family: var(--mono); font-size: 10px; color: var(--text4); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 12px; }
 .tr-wave { position: relative; height: 110px; border: 1px solid var(--border); cursor: crosshair; user-select: none; }

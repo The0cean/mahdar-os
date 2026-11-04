@@ -1240,7 +1240,8 @@ fn start_recording(app: AppHandle, state: State<AppState>, title: Option<String>
             let _ = store.save_meeting(&m);
         }
     };
-    match Recorder::start(&state.store.recording_path(&m.id), on_gap) {
+    let with_laptop = state.store.load_settings().record_laptop;
+    match Recorder::start(&state.store.recording_path(&m.id), with_laptop, on_gap) {
         Ok(r) => {
             let stealth = stealth.unwrap_or(false);
             state.stealth.store(stealth, Ordering::Relaxed);
@@ -1270,15 +1271,16 @@ struct RecordingLevel {
     seconds: f64,
     gaps: Vec<audio::Gap>,
     paused: bool,
+    /// Whether the laptop's sound is recorded too, and its level 0..1.
+    laptop: audio::Laptop,
+    laptop_level: f32,
 }
 
 #[tauri::command]
 fn recording_level(state: State<AppState>) -> Option<RecordingLevel> {
-    state.recorder.lock().unwrap().as_ref().map(|(r, _)| RecordingLevel {
-        level: r.level(),
-        seconds: r.seconds(),
-        gaps: r.gaps(),
-        paused: r.is_paused(),
+    state.recorder.lock().unwrap().as_ref().map(|(r, _)| {
+        let (laptop, laptop_level) = r.laptop();
+        RecordingLevel { level: r.level(), seconds: r.seconds(), gaps: r.gaps(), paused: r.is_paused(), laptop, laptop_level }
     })
 }
 
