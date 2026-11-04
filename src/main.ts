@@ -1873,6 +1873,63 @@ async function renderRemote() {
   $("remote-qr").innerHTML = r.enabled && r.qr_svg ? r.qr_svg : `<div class="off">// QR code appears when phone access is ON</div>`;
 }
 
+// ───────── export ─────────
+function toggleExportMenu(open?: boolean) {
+  const menu = $("export-menu");
+  const show = open ?? menu.classList.contains("hidden");
+  menu.classList.toggle("hidden", !show);
+  if (!show || !current) return;
+  const has = { text: current.chunks.length > 0, audio: current.duration_s > 0 && current.status !== "recording" && current.status !== "transcribing" };
+  menu.querySelectorAll<HTMLButtonElement>("button").forEach((b) => (b.disabled = b.dataset.need ? !has[b.dataset.need as keyof typeof has] : false));
+  const r = $("btn-export").getBoundingClientRect();
+  menu.style.top = `${r.bottom + 4}px`;
+  menu.style.left = `${Math.max(8, Math.min(r.right - menu.offsetWidth, innerWidth - menu.offsetWidth - 8))}px`;
+}
+
+/** Ask where to save, with `name` and its extension suggested. */
+async function saveAs(name: string, ext: string, kind: string): Promise<string | null> {
+  return save({ defaultPath: `${name}.${ext}`, filters: [{ name: kind, extensions: [ext] }] });
+}
+
+async function exportAs(what: string) {
+  const m = current;
+  if (!m) return;
+  const text = (format: string) => invoke<string>("meeting_text", { id: m.id, format });
+  const file = async (format: string, ext: string, kind: string, name = `${m.title} - Transcript`) => {
+    const path = await saveAs(name, ext, kind);
+    if (!path) return;
+    await invoke("save_text_file", { path, text: await text(format) });
+    toast("Saved");
+  };
+  try {
+    switch (what) {
+      case "copy": await navigator.clipboard.writeText(await text("text")); toast("Transcript copied"); break;
+      case "copy-all": await navigator.clipboard.writeText(await text("meeting")); toast("Meeting copied: notes, outputs and transcript"); break;
+      case "md": await file("markdown", "md", "Markdown"); break;
+      case "txt": await file("text", "txt", "Text"); break;
+      case "srt": await file("srt", "srt", "Subtitles"); break;
+      case "all": await file("meeting", "md", "Markdown", m.title); break;
+      case "word": {
+        const path = await saveAs(`${m.title} - Transcript`, "docx", "Word");
+        if (path) { await invoke("export_docx", { id: m.id, outputId: null, path }); toast("Saved Word document"); }
+        break;
+      }
+      case "pdf": {
+        const md = (await text("markdown")).replace(/</g, "&lt;");
+        $("print-area").innerHTML = `<div class="md" dir="auto">${marked.parse(md) as string}</div>`;
+        toast("Choose “Save as PDF” as the printer");
+        setTimeout(() => window.print(), 50);
+        break;
+      }
+      case "audio": {
+        const path = await saveAs(m.title, "wav", "Audio");
+        if (path) { toast("Saving audio…"); await invoke("export_audio", { id: m.id, path }); toast("Saved audio"); }
+        break;
+      }
+    }
+  } catch (e) { toast(String(e), true); }
+}
+
 // ───────── wiring ─────────
 function wireResultButtons() {
   $("res-copy").onclick = async () => {
@@ -1964,12 +2021,17 @@ async function init() {
     current = await invoke<Meeting>("get_meeting", { id: current.id });
     renderChat();
   };
-  $("btn-export-transcript").onclick = async () => {
-    const m = current;
-    if (!m || !m.chunks.length) return;
-    const path = await save({ defaultPath: `${m.title} - Transcript.docx`, filters: [{ name: "Word", extensions: ["docx"] }] });
-    if (!path) return;
-    try { await invoke("export_docx", { id: m.id, outputId: null, path }); toast("Saved transcript"); } catch (e) { toast(String(e), true); }
+  $("btn-export").onclick = (e) => { e.stopPropagation(); toggleExportMenu(); };
+  document.querySelectorAll<HTMLButtonElement>("#export-menu button").forEach((b) => (b.onclick = () => { toggleExportMenu(false); exportAs(b.dataset.x!); }));
+  document.addEventListener("mousedown", (e) => {
+    if (!$("export-menu").contains(e.target as Node) && e.target !== $("btn-export")) toggleExportMenu(false);
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") toggleExportMenu(false); });
+  $("n-copy").onclick = async () => {
+    const v = $<HTMLTextAreaElement>("notes-input").value;
+    if (!v.trim()) return toast("No notes yet", true);
+    await navigator.clipboard.writeText(v);
+    toast("Notes copied");
   };
   $("spk-name").onkeydown = (e) => {
     if (e.key === "Enter") { e.preventDefault(); closeSpeakerPop(true); }
