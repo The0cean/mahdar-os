@@ -355,6 +355,11 @@
                   </div>
                 </div>
                 <div class="field-note">// A2 and A3 run by themselves when a transcript is ready, including recordings from the watch folder and the phone. They use the engines chosen in Writing and Brain.</div>
+                <div class="card-sub">Stealth</div>
+                <div class="field"><label>A4 / Start recordings in stealth</label>
+                  <div class="fmt-row" id="s-stealth"><div class="fmt-opt" data-v="on">ON</div><div class="fmt-opt" data-v="off">OFF</div></div>
+                </div>
+                <div class="field-note">// Stealth turns the recording screen into a plain notes page: no timer, level meter or red dot, no REC on the taskbar or in the window title, and the time stamps of your notes are kept out of sight (they are still saved). Switch it any time while recording with ◐ or Ctrl+Shift+H. Windows still shows its own microphone icon near the clock while any app uses the microphone.</div>
               </div>
             </section>
 
@@ -431,17 +436,18 @@
 
     <div id="rec-overlay" class="overlay hidden">
       <div class="rec-card">
-        <div class="heading" id="rec-heading">● Recording</div>
-        <div id="rec-time" class="rec-time">00:00</div>
-        <div class="tl-bar big"><div class="tl-fill" id="rec-level"></div></div>
+        <div class="heading rec-only" id="rec-heading">● Recording</div>
+        <div id="rec-time" class="rec-time rec-only">00:00</div>
+        <div class="tl-bar big rec-only"><div class="tl-fill" id="rec-level"></div></div>
         <div class="field"><label>Title</label><input id="rec-title" placeholder="// optional" /></div>
         <div class="field"><label>Notes</label><textarea id="rec-notes" rows="7" dir="auto" spellcheck="false" placeholder="// type as you go: each new line gets the recording time"></textarea></div>
-        <div id="rec-gaps" class="field-note warn"></div>
+        <div id="rec-gaps" class="field-note warn rec-only"></div>
         <div class="rec-actions">
+          <button id="btn-stealth" class="hbtn">◐ STEALTH</button>
           <button id="btn-pause" class="hbtn" title="Pause: the microphone turns off until you resume">❚❚ PAUSE</button>
           <button id="btn-stop" class="go-btn">STOP &amp; TRANSCRIBE</button>
         </div>
-        <div class="field-note">// audio stays on this laptop, saved as it records<br>// the laptop stays awake while recording: keep the lid open (paused, it may sleep)</div>
+        <div class="field-note rec-only">// audio stays on this laptop, saved as it records<br>// the laptop stays awake while recording: keep the lid open (paused, it may sleep)</div>
       </div>
     </div>
 

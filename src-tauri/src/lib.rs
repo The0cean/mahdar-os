@@ -33,6 +33,8 @@ pub(crate) struct AppState {
     diarizer_stale: AtomicBool,
     /// The recording in progress, and its meeting id.
     recorder: Mutex<Option<(Recorder, String)>>,
+    /// The recording is in stealth: the taskbar doesn't show it.
+    pub(crate) stealth: AtomicBool,
     /// Unfinished recordings found at startup, for the UI to announce once.
     recovered: Mutex<Vec<String>>,
     /// FastFlowLM server started by Mahdar; stopped when the app exits.
@@ -1219,8 +1221,9 @@ async fn fill_note(app: AppHandle, id: String, at: f64, note: String) -> CmdResu
 // ---------- recording ----------
 
 /// Start recording into a new meeting, written to disk as it goes. Returns the meeting id.
+/// `stealth`: the taskbar doesn't show it (see [`set_stealth`]).
 #[tauri::command]
-fn start_recording(app: AppHandle, state: State<AppState>, title: Option<String>) -> CmdResult<String> {
+fn start_recording(app: AppHandle, state: State<AppState>, title: Option<String>, stealth: Option<bool>) -> CmdResult<String> {
     let mut rec = state.recorder.lock().unwrap();
     if rec.is_some() {
         return Err("already recording".into());
@@ -1239,7 +1242,9 @@ fn start_recording(app: AppHandle, state: State<AppState>, title: Option<String>
     };
     match Recorder::start(&state.store.recording_path(&m.id), on_gap) {
         Ok(r) => {
-            log::info("record", format!("recording \u{201c}{}\u{201d}", m.title));
+            let stealth = stealth.unwrap_or(false);
+            state.stealth.store(stealth, Ordering::Relaxed);
+            log::info("record", format!("recording \u{201c}{}\u{201d}{}", m.title, if stealth { " (stealth)" } else { "" }));
             *rec = Some((r, m.id.clone()));
             Ok(m.id)
         }
@@ -1431,9 +1436,17 @@ fn pause_recording(state: State<AppState>, paused: bool) -> CmdResult<()> {
     Ok(())
 }
 
+/// Stealth on or off for the recording in progress: on, the Windows taskbar shows no REC badge
+/// and the window title no "● REC" (the screen side is the UI's).
+#[tauri::command]
+fn set_stealth(state: State<AppState>, on: bool) {
+    state.stealth.store(on, Ordering::Relaxed);
+}
+
 #[tauri::command]
 fn stop_recording(app: AppHandle, state: State<AppState>, title: Option<String>, notes: Option<String>) -> CmdResult<String> {
     let (rec, id) = state.recorder.lock().unwrap().take().ok_or("not recording")?;
+    state.stealth.store(false, Ordering::Relaxed);
     let stopped = rec.stop();
     let mut m = state.store.load_meeting(&id).map_err(err)?;
     if title.as_deref().is_some_and(|t| !t.trim().is_empty()) {
@@ -1529,6 +1542,7 @@ pub fn run() {
                 diarizer: Mutex::new(None),
                 diarizer_stale: AtomicBool::new(false),
                 recorder: Mutex::new(None),
+                stealth: AtomicBool::new(false),
                 recovered: Mutex::new(recover.iter().map(|(_, t)| t.clone()).collect()),
                 flm: Mutex::new(None),
                 remote: Mutex::new(None),
@@ -1588,6 +1602,7 @@ pub fn run() {
             recording_level,
             stop_recording,
             pause_recording,
+            set_stealth,
             audio_peaks,
             set_archived,
             trim_meeting,
