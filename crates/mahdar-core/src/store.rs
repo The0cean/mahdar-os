@@ -252,6 +252,10 @@ pub struct Settings {
     /// taskbar shows nothing (no REC badge or title).
     #[serde(default)]
     pub stealth_recording: bool,
+    /// Record the laptop's own sound too (the other side of an online meeting), mixed with the
+    /// microphone. Windows only.
+    #[serde(default)]
+    pub record_laptop: bool,
 }
 
 impl Settings {
@@ -302,6 +306,7 @@ impl Settings {
             auto_update: true,
             auto_transcribe: true,
             stealth_recording: false,
+            record_laptop: false,
         }
     }
 }
