@@ -234,6 +234,13 @@ body.resizing iframe, body.resizing audio { pointer-events: none; }
 .spk-pop { position: fixed; z-index: 150; width: 230px; background: var(--bg); border: 1px solid var(--text); box-shadow: 5px 5px 0 var(--text); padding: 12px; }
 .spk-pop label { display: block; font-family: var(--mono); font-size: 9px; color: var(--text4); text-transform: uppercase; letter-spacing: 1px; margin: 4px 0; }
 .spk-pop input { margin-bottom: 8px; }
+.menu { position: fixed; z-index: 150; min-width: 210px; background: var(--bg); border: 1px solid var(--text); box-shadow: 5px 5px 0 var(--text); padding: 0 0 6px; display: flex; flex-direction: column; }
+.menu button { font-family: var(--mono); font-size: 10px; letter-spacing: 1px; text-align: left; padding: 7px 14px; border: none; background: none; color: var(--text2); cursor: pointer; }
+.menu button:hover:not(:disabled) { background: var(--surface2); color: var(--accent); }
+.menu button:disabled { color: var(--text5); cursor: default; }
+.menu-sep { font-family: var(--mono); font-size: 9px; color: var(--text4); text-transform: uppercase; letter-spacing: 2px; padding: 10px 14px 4px; }
+.menu-sep + button { margin-top: 2px; }
+.menu button + .menu-sep { border-top: 1px solid var(--border); margin-top: 6px; }
 .spk-assign { display: flex; flex-wrap: wrap; gap: 4px; }
 .spk-assign .spk { max-width: none; }
 .line p { font-family: var(--arabic); font-size: 1rem; line-height: 1.95; color: var(--text); unicode-bidi: plaintext; text-align: start; }

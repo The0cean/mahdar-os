@@ -94,7 +94,7 @@
               <input id="t-search" class="hsearch" placeholder="// find" />
               <button id="btn-fix" class="hbtn accent hidden" title="Re-run the unclear (⚠) parts on smaller pieces">FIX UNCLEAR</button>
               <button id="btn-follow" class="hbtn" title="Scroll the transcript with the audio">FOLLOW</button>
-              <button id="btn-export-transcript" class="hbtn" title="Save the transcript as a Word document">WORD</button>
+              <button id="btn-export" class="hbtn" title="Copy or save the transcript, the whole meeting or the audio">EXPORT ▾</button>
               <button id="btn-brain-index" class="hbtn" title="Add this meeting to the Brain (search + tags across meetings)">BRAIN</button>
               <button id="btn-trim" class="hbtn" title="Cut the start, the end or parts in the middle">TRIM</button>
               <button id="btn-retranscribe" class="hbtn">RE-TRANSCRIBE</button>
@@ -161,6 +161,7 @@
               <div class="notes-bar">
                 <button id="n-stamp" class="hbtn" title="Start a note at the player's position (M)">+ TIME</button>
                 <button id="n-import" class="hbtn" title="Add notes from a .txt, .md or .docx file">IMPORT</button>
+                <button id="n-copy" class="hbtn" title="Copy the notes">COPY</button>
                 <span id="n-saved" class="n-saved"></span>
               </div>
               <textarea id="notes-input" dir="auto" spellcheck="false" placeholder="// your notes: every output builds on them&#10;// mark a time to look back at: [08:12], @8, min 8&#10;// add ? or &quot;missed&quot; for parts you didn't catch&#10;//   @8 missed the price they quoted ?"></textarea>
@@ -496,6 +497,19 @@
       <input id="spk-name" placeholder="// speaker name" dir="auto" />
       <label>This line is</label>
       <div id="spk-assign" class="spk-assign"></div>
+    </div>
+    <div id="export-menu" class="menu hidden">
+      <div class="menu-sep">Transcript</div>
+      <button data-x="copy" data-need="text">COPY</button>
+      <button data-x="md" data-need="text">MARKDOWN · .md</button>
+      <button data-x="word" data-need="text">WORD · .docx</button>
+      <button data-x="pdf" data-need="text">PDF</button>
+      <button data-x="txt" data-need="text">TEXT · .txt</button>
+      <button data-x="srt" data-need="text" title="Subtitles, for a video of the meeting">SUBTITLES · .srt</button>
+      <div class="menu-sep">Whole meeting</div>
+      <button data-x="copy-all" title="Notes, every output and the transcript">COPY EVERYTHING</button>
+      <button data-x="all" title="Notes, every output and the transcript, in one file">EVERYTHING · .md</button>
+      <button data-x="audio" data-need="audio" title="The recording as it plays here (trims and joins included)">AUDIO · .wav</button>
     </div>
     <div id="print-area" class="print-area"></div>
     <div id="toast" class="toast hidden"></div>
