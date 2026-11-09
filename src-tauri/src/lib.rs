@@ -1033,6 +1033,28 @@ fn export_docx(state: State<AppState>, id: String, output_id: Option<String>, pa
     std::fs::write(path, bytes).map_err(err)
 }
 
+/// The transcript (plain text, Markdown, subtitles) or the whole meeting, as text to copy or save.
+#[tauri::command]
+fn meeting_text(state: State<AppState>, id: String, format: mahdar_core::text_export::TextFormat) -> CmdResult<String> {
+    let m = state.store.load_meeting(&id).map_err(err)?;
+    Ok(mahdar_core::text_export::render(&m, format))
+}
+
+/// Save a copy of the meeting's audio (as it plays in Mahdar: trimmed, joined) to `path`.
+#[tauri::command]
+async fn export_audio(app: AppHandle, id: String, path: String) -> CmdResult<()> {
+    // Recordings can be hundreds of MB: copied off the window's thread.
+    tauri::async_runtime::spawn_blocking(move || {
+        let src = app.state::<AppState>().store.audio_path(&id);
+        if !src.is_file() {
+            return Err("this meeting's audio isn't ready yet".to_string());
+        }
+        std::fs::copy(&src, &path).map(|_| ()).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
 // ---------- writing (outputs and questions) ----------
 
 /// Send a prompt to the configured writer, starting the local server if needed.
@@ -1598,6 +1620,8 @@ pub fn run() {
             set_speaker_name,
             set_chunk_speaker,
             export_docx,
+            meeting_text,
+            export_audio,
             start_recording,
             recording_level,
             stop_recording,

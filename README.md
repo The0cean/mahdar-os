@@ -10,6 +10,7 @@ Mahdar is a desktop app that turns Arabic and English meetings into transcripts,
 - **Archive**: ARCHIVE (in a meeting, or for the meetings ticked in the Library) moves meetings out of the Library list into ARCHIVED, where UNARCHIVE brings them back. Nothing is deleted, archived meetings stay searchable in the Brain, and the phone list leaves them out.
 - **Taskbar**: the Mahdar button on the Windows taskbar shows a red dot while recording (amber pause badge while paused), a progress bar while transcribing or writing, and flashes when a transcription is done while you're in another window. The window title says the same, e.g. `● REC 12:34 · Transcribing 42% · Mahdar`.
 - **Stealth**: while recording, ◐ STEALTH (or Ctrl+Shift+H) turns the recording screen into a plain notes page: no timer, level meter or red dot, nothing on the taskbar or in the window title, and the notes' time stamps are kept out of sight (still saved with the meeting). Settings → Automation → A4 starts every recording that way. Windows still shows its own microphone icon while the microphone is in use.
+- **Export**: EXPORT ▾ above the transcript copies it or saves it as Markdown, Word, PDF, plain text or subtitles (.srt); COPY EVERYTHING / EVERYTHING · .md give the whole meeting (notes, every output, the transcript) in one go, and AUDIO · .wav saves the recording as it plays (trims and joins included). Notes have their own COPY.
 
 ## Install
 
