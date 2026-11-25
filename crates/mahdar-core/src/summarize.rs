@@ -39,6 +39,28 @@ impl Provider {
         Provider::Local { base_url: LOCAL_URL.into(), model: LOCAL_MODEL.into() }
     }
 
+    fn model(&self) -> &str {
+        match self {
+            Provider::ClaudeCli { model } | Provider::ClaudeApi { model, .. } | Provider::CursorCli { model } | Provider::Local { model, .. } => model,
+        }
+    }
+
+    /// Whether the phone may switch to this writer. The phone picks among writers, but it can't
+    /// point the local writer at a server the laptop doesn't already use (that would send it
+    /// the transcripts), and model names must be plain (they go on a command line).
+    pub fn check_from_phone(&self, laptop: &[&Provider]) -> Result<()> {
+        if !plain_model_name(self.model()) {
+            bail!("that model name can't be used: letters, digits and - . _ : / only");
+        }
+        if let Provider::Local { base_url, .. } = self {
+            let known = laptop.iter().any(|p| matches!(p, Provider::Local { base_url: b, .. } if b.trim() == base_url.trim()));
+            if !known && !is_loopback_url(base_url) {
+                bail!("the local server's address can only be changed on the laptop (Settings → Writing)");
+            }
+        }
+        Ok(())
+    }
+
     pub fn label(&self) -> String {
         match self {
             Provider::ClaudeCli { model } => format!("Claude {model} (cloud)"),
@@ -49,6 +71,29 @@ impl Provider {
             Provider::Local { model, .. } => format!("{model} (local)"),
         }
     }
+}
+
+/// A model name that is safe on a command line: ASCII letters, digits and `- . _ : /`, at most
+/// 100 characters (e.g. "sonnet", "gpt-5.1-codex", "gemma4-it:12b"). Empty is allowed: the
+/// writer's default. Cursor's launcher runs through `cmd /C`, where `&`, `|`, `^` or `%` in an
+/// argument would start other commands.
+pub fn plain_model_name(m: &str) -> bool {
+    m.len() <= 100 && m.chars().all(|c| c.is_ascii_alphanumeric() || "-._:/".contains(c))
+}
+
+/// "http://127.0.0.1:11434/v1", "http://localhost/v1", "http://[::1]:8080": a server on this laptop.
+fn is_loopback_url(url: &str) -> bool {
+    let url = url.trim().to_ascii_lowercase();
+    let Some(rest) = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://")) else { return false };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.contains('@') || authority.contains('\\') {
+        return false;
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => v6.split(']').next().unwrap_or(""),
+        None => authority.split(':').next().unwrap_or(""),
+    };
+    host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -415,6 +460,9 @@ fn install_hint(e: anyhow::Error, hint: &str) -> anyhow::Error {
 const CLI_LIMIT: Duration = Duration::from_secs(30 * 60);
 
 fn claude_cli(model: &str, prompt: &str) -> Result<String> {
+    if !plain_model_name(model) {
+        bail!("the Claude Code model name {model:?} can't be used: letters, digits and - . _ : / only");
+    }
     let mut cmd = Command::new("claude");
     cmd.args(["-p", "--model", model, "--output-format", "text", "--no-session-persistence"])
         .args(["--system-prompt", SYSTEM])
@@ -481,6 +529,9 @@ fn cursor_cli(model: &str, prompt: &str) -> Result<String> {
 }
 
 fn cursor_cli_with(model: &str, prompt: &str, direct: bool) -> Result<String> {
+    if !plain_model_name(model.trim()) {
+        bail!("the Cursor model name {:?} can't be used: letters, digits and - . _ : / only", model.trim());
+    }
     // The request goes in a file inside a throwaway workspace: transcripts are
     // too long for a Windows command line, and ask mode keeps the agent read-only.
     let ws = std::env::temp_dir().join(format!("mahdar-cursor-{}", uuid::Uuid::new_v4()));
@@ -665,6 +716,52 @@ fn openai_compatible(base_url: &str, model: &str, prompt: &str, local: &LocalOpt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_phone_cant_redirect_the_writer() {
+        let laptop_lan = Provider::Local { base_url: "http://192.168.1.20:11434/v1".into(), model: "gemma4-it:12b".into() };
+        let api = Provider::ClaudeApi { model: "claude-sonnet-5-5".into(), effort: "high".into() };
+        let laptop = [&api, &laptop_lan];
+        let local = |url: &str| Provider::Local { base_url: url.into(), model: "gemma4-it:12b".into() };
+        // Allowed: this laptop's own server, the one the laptop already uses, and cloud writers.
+        for ok in [
+            local("http://127.0.0.1:11434/v1"),
+            local("http://localhost:8080/v1"),
+            local("http://[::1]:11434/v1"),
+            local("http://192.168.1.20:11434/v1"),
+            api.clone(),
+            Provider::ClaudeCli { model: "sonnet".into() },
+            Provider::CursorCli { model: "".into() },
+            Provider::CursorCli { model: "gpt-5.1-codex".into() },
+        ] {
+            ok.check_from_phone(&laptop).unwrap_or_else(|e| panic!("{ok:?}: {e}"));
+        }
+        // Refused: another server gets the transcripts, or a model name reaches cmd.exe.
+        for bad in [
+            local("http://203.0.113.9:9/v1"),
+            local("http://evil.example/v1"),
+            local("http://127.0.0.1@evil.example/v1"),
+            local("http://127.0.0.1.evil.example/v1"),
+            local("http://127.0.0.1\\@evil.example/v1"),
+            local("file:///C:/x"),
+            Provider::CursorCli { model: "x&calc.exe".into() },
+            Provider::CursorCli { model: "x|whoami".into() },
+            Provider::CursorCli { model: "%COMSPEC%".into() },
+            Provider::ClaudeCli { model: "sonnet \"--tools\" Bash".into() },
+            Provider::Local { base_url: LOCAL_URL.into(), model: "m^x".into() },
+        ] {
+            assert!(bad.check_from_phone(&laptop).is_err(), "{bad:?}");
+        }
+        assert!(plain_model_name("") && plain_model_name("gemma4-it:12b") && !plain_model_name(&"a".repeat(101)));
+    }
+
+    #[test]
+    fn cursor_refuses_a_model_name_cmd_would_run() {
+        let e = cursor_cli("x&calc.exe", "hi").unwrap_err();
+        assert!(format!("{e:#}").contains("can't be used"), "{e:#}");
+        let e = claude_cli("haiku&calc", "hi").unwrap_err();
+        assert!(format!("{e:#}").contains("can't be used"), "{e:#}");
+    }
 
     #[test]
     fn prices_api_usage() {

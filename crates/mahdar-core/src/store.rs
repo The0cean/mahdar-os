@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 
@@ -328,6 +328,65 @@ impl Spend {
     }
 }
 
+/// Whether `id` can name a meeting. Mahdar makes ids like "20261125-103000-1a2b3c": ASCII
+/// letters, digits, '-' and '_'. Anything else (empty, ".", "..", a path) is refused, so an id
+/// from the phone or the window can never reach outside the meetings folder.
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+fn check_id(id: &str) -> Result<()> {
+    ensure!(valid_id(id), "not a meeting id: {id:?}");
+    Ok(())
+}
+
+/// Write a file so that a crash or power cut leaves either the old contents or the new ones,
+/// never a part of them: write a temporary file beside it, flush it to disk, then rename it
+/// over the old one. Each write uses its own temporary name, so two saves can't mix.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{}.tmp", uuid::Uuid::new_v4().simple()));
+    let written = (|| -> std::io::Result<()> {
+        let mut f = fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        drop(f);
+        // Antivirus or the search indexer can hold the old file for a moment on Windows.
+        let mut tries = 0;
+        loop {
+            match fs::rename(&tmp, path) {
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && tries < 5 => {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(50 * tries));
+                }
+                r => return r,
+            }
+        }
+    })();
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written.with_context(|| format!("could not save {}", path.display()))
+}
+
+/// Settings from `settings.json` when the whole file doesn't parse (a newer version wrote a
+/// value this one doesn't know, or the file was edited by hand): every field that still reads
+/// is kept, the others get their defaults.
+fn settings_field_by_field(defaults: Settings, file: &serde_json::Value) -> Settings {
+    let (Ok(serde_json::Value::Object(mut base)), Some(fields)) = (serde_json::to_value(&defaults), file.as_object()) else {
+        return defaults;
+    };
+    for (k, v) in fields {
+        let mut trial = base.clone();
+        trial.insert(k.clone(), v.clone());
+        if serde_json::from_value::<Settings>(serde_json::Value::Object(trial.clone())).is_ok() {
+            base = trial;
+        }
+    }
+    serde_json::from_value(serde_json::Value::Object(base)).unwrap_or(defaults)
+}
+
 pub struct Store {
     root: PathBuf,
 }
@@ -342,8 +401,10 @@ impl Store {
         &self.root
     }
 
+    /// A meeting's folder. An id that isn't one (see [`valid_id`]) gets a folder name no meeting
+    /// can have, so every path made from an id stays inside `meetings`.
     pub fn meeting_dir(&self, id: &str) -> PathBuf {
-        self.root.join("meetings").join(id)
+        self.root.join("meetings").join(if valid_id(id) { id } else { ".invalid" })
     }
 
     pub fn audio_path(&self, id: &str) -> PathBuf {
@@ -367,15 +428,14 @@ impl Store {
     }
 
     pub fn save_meeting(&self, m: &Meeting) -> Result<()> {
+        check_id(&m.id)?;
         let dir = self.meeting_dir(&m.id);
         fs::create_dir_all(&dir)?;
-        let tmp = dir.join("meeting.json.tmp");
-        fs::write(&tmp, serde_json::to_vec_pretty(m)?)?;
-        fs::rename(&tmp, dir.join("meeting.json"))?;
-        Ok(())
+        write_atomic(&dir.join("meeting.json"), &serde_json::to_vec_pretty(m)?)
     }
 
     pub fn load_meeting(&self, id: &str) -> Result<Meeting> {
+        check_id(id)?;
         let p = self.meeting_dir(id).join("meeting.json");
         let bytes = fs::read(&p).with_context(|| format!("meeting {id} not found"))?;
         Ok(serde_json::from_slice(&bytes)?)
@@ -402,22 +462,55 @@ impl Store {
     }
 
     pub fn delete_meeting(&self, id: &str) -> Result<()> {
+        check_id(id)?;
         let dir = self.meeting_dir(id);
-        if dir.starts_with(self.root.join("meetings")) && dir.exists() {
+        if dir.exists() {
             fs::remove_dir_all(dir)?;
         }
         Ok(())
     }
 
+    /// Settings from `settings.json`, or the defaults on first run. A file that can't be read
+    /// as a whole is copied to `settings.broken-<hash>.json` first (it is about to be saved
+    /// over), and the fields that still read are kept.
     pub fn load_settings(&self) -> Settings {
-        let mut s: Settings = fs::read(self.root.join("settings.json"))
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_else(|| Settings::defaults(&self.root));
+        let path = self.root.join("settings.json");
+        let defaults = || Settings::defaults(&self.root);
+        let mut s = match fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_else(|e| {
+                let kept = match self.keep_broken_settings(&bytes) {
+                    Ok(name) => format!("a copy is in {name}"),
+                    Err(e) => format!("no copy could be kept: {e:#}"),
+                };
+                crate::log::warn("settings", format!("settings.json didn't read ({e}); {kept}"));
+                match serde_json::from_slice::<serde_json::Value>(&bytes) {
+                    Ok(v) => settings_field_by_field(defaults(), &v),
+                    Err(_) => defaults(),
+                }
+            }),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => defaults(),
+            Err(e) => {
+                crate::log::warn("settings", format!("could not read settings.json ({e}); using the defaults"));
+                defaults()
+            }
+        };
         if s.diarizer_path.is_empty() {
             s.diarizer_path = self.root.join("models").join(crate::DIARIZER_FILE).to_string_lossy().into_owned();
         }
         s
+    }
+
+    /// Copy an unreadable settings file aside, once per distinct content. Returns its name.
+    fn keep_broken_settings(&self, bytes: &[u8]) -> Result<String> {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut h);
+        let name = format!("settings.broken-{:016x}.json", h.finish());
+        let p = self.root.join(&name);
+        if !p.exists() {
+            write_atomic(&p, bytes)?;
+        }
+        Ok(name)
     }
 
     /// Files the folder watcher has already seen, keyed by "path|size|mtime".
@@ -429,8 +522,7 @@ impl Store {
     }
 
     pub fn save_seen(&self, seen: &std::collections::HashSet<String>) -> Result<()> {
-        fs::write(self.root.join("watched.json"), serde_json::to_vec(seen)?)?;
-        Ok(())
+        write_atomic(&self.root.join("watched.json"), &serde_json::to_vec(seen)?)
     }
 
     /// Add a Claude API charge to `usage.json` (per day and total).
@@ -439,8 +531,7 @@ impl Store {
         let day = chrono::Local::now().format("%Y-%m-%d").to_string();
         *s.days.entry(day).or_default() += usd;
         s.total += usd;
-        fs::write(self.root.join("usage.json"), serde_json::to_vec_pretty(&s)?)?;
-        Ok(())
+        write_atomic(&self.root.join("usage.json"), &serde_json::to_vec_pretty(&s)?)
     }
 
     pub fn spend(&self) -> Spend {
@@ -448,14 +539,102 @@ impl Store {
     }
 
     pub fn save_settings(&self, s: &Settings) -> Result<()> {
-        fs::write(self.root.join("settings.json"), serde_json::to_vec_pretty(s)?)?;
-        Ok(())
+        write_atomic(&self.root.join("settings.json"), &serde_json::to_vec_pretty(s)?)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn temp_root() -> PathBuf {
+        let d = std::env::temp_dir().join(format!("mahdar-store-{}", uuid::Uuid::new_v4().simple()));
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn meeting(id: &str) -> Meeting {
+        serde_json::from_str(&format!(
+            r#"{{"id":"{id}","title":"T","created":"2026-10-01T10:00:00+03:00","source":"a.m4a","duration_s":1,"language":"ar","status":"ready"}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn ids_cant_leave_the_meetings_folder() {
+        let root = temp_root();
+        let store = Store::new(root.join("data")).unwrap();
+        store.save_settings(&Settings::defaults(store.root())).unwrap();
+        fs::write(root.join("outside.txt"), "keep me").unwrap();
+        let real = "20261125-103000-1a2b3c";
+        store.save_meeting(&meeting(real)).unwrap();
+        assert!(valid_id(real) && valid_id("custom_1"));
+        for bad in ["", ".", "..", "../..", "..\\..", "a/b", "a\\b", "C:\\x", "\\\\host\\share", "x y", "ü"] {
+            assert!(!valid_id(bad), "{bad:?}");
+            assert!(store.delete_meeting(bad).is_err(), "{bad:?}");
+            assert!(store.load_meeting(bad).is_err(), "{bad:?}");
+            assert!(store.save_meeting(&meeting(&bad.replace('\\', "\\\\"))).is_err(), "{bad:?}");
+            assert!(store.meeting_dir(bad).starts_with(store.root().join("meetings")), "{bad:?}");
+            assert_eq!(store.audio_path(bad), store.root().join("meetings").join(".invalid").join("audio.wav"));
+        }
+        // Nothing outside the meeting was touched.
+        assert!(root.join("outside.txt").is_file() && store.root().join("settings.json").is_file());
+        assert_eq!(store.list_meetings().unwrap().len(), 1);
+        store.delete_meeting(real).unwrap();
+        assert!(store.list_meetings().unwrap().is_empty() && store.root().join("meetings").is_dir());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn saves_leave_no_temporary_files() {
+        let root = temp_root();
+        let store = Store::new(root.clone()).unwrap();
+        let id = "20261125-103000-1a2b3c";
+        for _ in 0..3 {
+            store.save_meeting(&meeting(id)).unwrap();
+            store.save_settings(&Settings::defaults(&root)).unwrap();
+            store.add_spend(0.5).unwrap();
+        }
+        assert_eq!(store.spend().total, 1.5);
+        for dir in [root.clone(), store.meeting_dir(id)] {
+            let names: Vec<String> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+            assert!(names.iter().all(|n| !n.ends_with(".tmp")), "{names:?}");
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unreadable_settings_are_kept_and_what_reads_survives() {
+        let root = temp_root();
+        let store = Store::new(root.clone()).unwrap();
+        let mut s = Settings::defaults(&root);
+        s.glossary = "Mahdar\nمحضر".into();
+        s.remote_token = "tok".into();
+        s.watch_folder = Some("D:/calls".into());
+        store.save_settings(&s).unwrap();
+        // A newer version wrote a backend this one doesn't know.
+        let text = fs::read_to_string(root.join("settings.json")).unwrap().replace(r#""backend": "vulkan""#, r#""backend": "npu""#);
+        assert!(text.contains("npu"));
+        fs::write(root.join("settings.json"), &text).unwrap();
+        let back = store.load_settings();
+        assert_eq!((back.glossary.as_str(), back.remote_token.as_str()), ("Mahdar\nمحضر", "tok"));
+        assert_eq!(back.watch_folder.as_deref(), Some("D:/calls"));
+        let broken: Vec<PathBuf> = fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("settings.broken-"))
+            .collect();
+        assert_eq!(broken.len(), 1);
+        assert_eq!(fs::read_to_string(&broken[0]).unwrap(), text);
+        // Reading it again doesn't make another copy.
+        store.load_settings();
+        assert_eq!(fs::read_dir(&root).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("settings.broken-")).count(), 1);
+        // Cut off mid-write (older versions): the defaults, with the file kept.
+        fs::write(root.join("settings.json"), &text[..text.len() / 2]).unwrap();
+        assert!(store.load_settings().glossary.is_empty());
+        assert_eq!(fs::read_dir(&root).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().starts_with("settings.broken-")).count(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn old_settings_get_new_defaults() {

@@ -1915,6 +1915,7 @@ async function exportAs(what: string) {
   try {
     switch (what) {
       case "copy": await navigator.clipboard.writeText(await text("text")); toast("Transcript copied"); break;
+      case "copy-md": await navigator.clipboard.writeText(await text("markdown")); toast("Transcript copied as Markdown"); break;
       case "copy-all": await navigator.clipboard.writeText(await text("meeting")); toast("Meeting copied: notes, outputs and transcript"); break;
       case "md": await file("markdown", "md", "Markdown"); break;
       case "txt": await file("text", "txt", "Text"); break;

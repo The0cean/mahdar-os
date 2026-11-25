@@ -1509,6 +1509,18 @@ fn native_dir(app: &AppHandle) -> PathBuf {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // First, so a second launch (a double-click on the shortcut, or the watchdog misreading
+        // a running app as crashed) exits before setup: there it would take this instance's
+        // live recording for a crashed one, recover it and delete the file still being written.
+        // It brings this window to the front instead.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            log::info("app", "Mahdar was started again; showing this window instead");
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.unminimize();
+                let _ = w.show();
+                let _ = w.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
