@@ -204,6 +204,9 @@ async fn meeting(State(ctx): State<Ctx>, Path(id): Path<String>) -> ApiResult<ma
 }
 
 async fn delete(State(ctx): State<Ctx>, Path(id): Path<String>) -> ApiResult<bool> {
+    if state(&ctx).recorder.lock().unwrap().as_ref().is_some_and(|(_, rid)| *rid == id) {
+        return Err(bad("this meeting is still recording: stop it on the laptop first"));
+    }
     state(&ctx).store.delete_meeting(&id).map_err(bad)?;
     crate::brain::forget(&ctx.app, &id);
     let _ = ctx.app.emit("meeting-updated", id);
@@ -387,6 +390,13 @@ async fn get_settings(State(ctx): State<Ctx>) -> ApiResult<PhoneSettings> {
 async fn set_settings(State(ctx): State<Ctx>, Json(b): Json<PhoneSettings>) -> ApiResult<bool> {
     let st = state(&ctx);
     let mut s = st.store.load_settings();
+    // The phone chooses among writers; it can't send transcripts to a new server or put
+    // arbitrary text on a command line.
+    let laptop: Vec<&mahdar_core::summarize::Provider> = std::iter::once(&s.provider).chain(s.brain_provider.as_ref()).collect();
+    b.provider.check_from_phone(&laptop).map_err(bad)?;
+    if let Some(p) = &b.brain_provider {
+        p.check_from_phone(&laptop).map_err(bad)?;
+    }
     s.provider = b.provider;
     s.output_language = b.output_language;
     s.language = b.language;
